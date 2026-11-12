@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Radar Local",
+  "version": "0.1.0",
+  "description": "Monitoramento local de preços com pastas personalizadas e histórico.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_title": "Radar Local",
+    "default_popup": "popup.html"
+  }
+}
