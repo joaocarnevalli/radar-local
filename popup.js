@@ -13,6 +13,8 @@ const collapsedGroups = new Set();
 const expandedProducts = new Set();
 const expandedOffers = new Set();
 const faviconFetches = new Map();
+const refreshStates = new Map();
+const productRefreshStates = new Set();
 let isBatchUpdating = false;
 const floatingWindowMode = new URLSearchParams(location.search).get("floating") === "1";
 let data = { folders: [], products: [], items: [], siteProfiles: [] };
@@ -171,6 +173,10 @@ async function openFloatingWindow() {
   } catch (error) { showToast(error.message || "Não consegui abrir a janela flutuante.", true); }
 }
 
+function openDashboard() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+}
+
 async function loadSettings() {
   const saved = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] || {};
   return normalizeSettings(saved);
@@ -217,6 +223,13 @@ function bindEvents() {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && (changes.radarLocalAutoQueue || changes[AUTO_STATUS_KEY])) syncQueueStatus();
   });
+  if (document.documentElement.classList.contains("dashboard-embed")) {
+    window.addEventListener("message", event => {
+      if (event.source !== window.parent || event.data?.type !== "radar:navigate") return;
+      const view = ["itemsView", "foldersView", "settingsView"].includes(event.data.view) ? event.data.view : "itemsView";
+      document.querySelector(`.tab[data-view="${view}"]`)?.click();
+    });
+  }
   document.querySelectorAll(".tab").forEach(button => button.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(tab => tab.classList.toggle("active", tab === button));
     document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === button.dataset.view));
@@ -234,7 +247,11 @@ function bindEvents() {
   document.getElementById("cancelNewProduct").addEventListener("click", () => document.getElementById("newProductForm").classList.add("hidden"));
   document.getElementById("folderForm").addEventListener("submit", createFolder);
   document.getElementById("refreshAll").addEventListener("click", refreshAllItems);
+  document.getElementById("productSearch").addEventListener("input", renderItems);
+  document.getElementById("productFilter").addEventListener("change", renderItems);
+  document.getElementById("productSort").addEventListener("change", renderItems);
   document.getElementById("backupExport").addEventListener("click", exportBackup);
+  document.getElementById("dashboardLaunch").addEventListener("click", openDashboard);
   document.getElementById("openFloating").addEventListener("click", openFloatingWindow);
   document.getElementById("backupImport").addEventListener("click", () => document.getElementById("backupFile").click());
   document.getElementById("backupFile").addEventListener("change", importBackup);
@@ -559,6 +576,8 @@ async function saveCurrentPage() {
   if (duplicate) return showToast("Esse link já está monitorado. Use Atualizar no item existente.", true);
   const price = parseUserPrice(document.getElementById("itemPrice").value);
   const target = parseUserPrice(document.getElementById("itemTarget").value);
+  const detectedPrice = currentPage.price;
+  const sameAsDetected = Boolean(price && detectedPrice && Math.round(price.amount * 100) === Math.round(Number(detectedPrice.amount) * 100));
   const productId = crypto.randomUUID();
   const folderId = document.getElementById("itemFolder").value;
   const product = { id: productId, name, folderId, target: target?.amount ?? null, createdAt: new Date().toISOString() };
@@ -570,7 +589,11 @@ async function saveCurrentPage() {
     folderId,
     target: target?.amount ?? null,
     selector: document.getElementById("itemSelector").value.trim(),
-    price: price ? { ...price, checkedAt: new Date().toISOString(), source: "entrada manual", confidence: "confirmed" } : (currentPage.price ? { ...currentPage.price, checkedAt: new Date().toISOString() } : null),
+    price: sameAsDetected
+      ? { ...detectedPrice, checkedAt: new Date().toISOString() }
+      : price
+        ? { ...price, currency: price.currency || detectedPrice?.currency || "", checkedAt: new Date().toISOString(), source: "entrada manual", confidence: "confirmed" }
+        : (detectedPrice ? { ...detectedPrice, checkedAt: new Date().toISOString() } : null),
     history: []
   };
   if (entry.price) entry.history.push({ amount: entry.price.amount, currency: entry.price.currency || "", checkedAt: entry.price.checkedAt, source: entry.price.source || "page" });
@@ -630,14 +653,131 @@ function getFolderColor(folder, index = 0) {
 
 function fillFolderSelect(select, selected, includeNoFolder = false) {
   if (!select) return;
+  select.classList.add("folder-select");
   select.replaceChildren();
   if (includeNoFolder) addOption(select, NO_FOLDER, "Sem pasta");
-  data.folders.forEach(folder => addOption(select, folder.id, folder.name));
+  data.folders.forEach(folder => addOption(select, folder.id, folder.name, getFolderColor(folder)));
   select.value = [...select.options].some(option => option.value === selected) ? selected : (includeNoFolder ? NO_FOLDER : data.folders[0]?.id || NO_FOLDER);
+  updateFolderSelectColor(select);
+  if (select.dataset.folderColorHandler !== "bound") {
+    select.addEventListener("change", () => {
+      updateFolderSelectColor(select);
+      updateFolderPickerSelection(select);
+    });
+    select.dataset.folderColorHandler = "bound";
+  }
+  syncFolderPicker(select);
 }
 
-function addOption(select, value, text) {
-  const option = document.createElement("option"); option.value = value; option.textContent = text; select.append(option);
+function updateFolderSelectColor(select) {
+  const folder = data.folders.find(row => row.id === select.value);
+  if (!folder) {
+    select.style.removeProperty("--folder-accent");
+    return;
+  }
+  select.style.setProperty("--folder-accent", getFolderColor(folder));
+}
+
+function syncFolderPicker(select) {
+  if (!select?.parentElement) return;
+  let picker = select.nextElementSibling;
+  if (!picker?.classList.contains("folder-picker")) {
+    picker = document.createElement("details");
+    picker.className = "folder-picker";
+    const trigger = document.createElement("summary");
+    trigger.className = "folder-picker-trigger";
+    trigger.innerHTML = '<span class="folder-picker-current"><span class="folder-picker-dot" aria-hidden="true"></span><span class="folder-picker-name"></span></span><svg viewBox="0 0 12 8" aria-hidden="true"><path d="m1 1 5 5 5-5"/></svg>';
+    const menu = document.createElement("div");
+    menu.className = "folder-picker-menu";
+    menu.setAttribute("role", "group");
+    menu.setAttribute("aria-label", "Escolher pasta");
+    picker.append(trigger, menu);
+    select.after(picker);
+    picker.addEventListener("toggle", () => {
+      if (picker.open) positionFolderPicker(picker);
+    });
+    picker.addEventListener("keydown", event => {
+      if (event.key === "Escape" && picker.open) {
+        picker.open = false;
+        picker.querySelector("summary")?.focus();
+      }
+    });
+    if (!document.documentElement.dataset.folderPickerOutsideHandler) {
+      document.addEventListener("pointerdown", event => {
+        document.querySelectorAll(".folder-picker[open]").forEach(openPicker => {
+          if (!openPicker.contains(event.target)) openPicker.open = false;
+        });
+      }, true);
+      document.documentElement.dataset.folderPickerOutsideHandler = "bound";
+    }
+    select.classList.add("folder-native-select");
+  }
+
+  const menu = picker.querySelector(".folder-picker-menu");
+  menu.replaceChildren();
+  [...select.options].forEach(option => {
+    const folder = data.folders.find(row => row.id === option.value);
+    const color = folder ? getFolderColor(folder) : "";
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = "folder-picker-option";
+    choice.setAttribute("aria-pressed", "false");
+    choice.dataset.value = option.value;
+    choice.innerHTML = '<span class="folder-picker-dot" aria-hidden="true"></span><span class="folder-picker-option-name"></span>';
+    choice.querySelector(".folder-picker-option-name").textContent = option.textContent;
+    if (color) choice.style.setProperty("--folder-accent", color);
+    choice.addEventListener("click", () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      picker.open = false;
+    });
+    menu.append(choice);
+  });
+  updateFolderPickerSelection(select);
+}
+
+function updateFolderPickerSelection(select) {
+  const picker = select?.nextElementSibling;
+  if (!picker?.classList.contains("folder-picker")) return;
+  const option = [...select.options].find(row => row.value === select.value);
+  const folder = data.folders.find(row => row.id === select.value);
+  const color = folder ? getFolderColor(folder) : "";
+  const dot = picker.querySelector(".folder-picker-current .folder-picker-dot");
+  const name = picker.querySelector(".folder-picker-name");
+  name.textContent = option?.textContent || "Selecionar pasta";
+  picker.querySelector(".folder-picker-trigger")?.setAttribute("aria-label", `Pasta: ${name.textContent}`);
+  dot.style.setProperty("--folder-accent", color || "transparent");
+  picker.style.setProperty("--folder-accent", color || "transparent");
+  picker.querySelectorAll(".folder-picker-option").forEach(choice => {
+    choice.setAttribute("aria-pressed", String(choice.dataset.value === select.value));
+  });
+}
+
+function positionFolderPicker(picker) {
+  const trigger = picker.querySelector(".folder-picker-trigger");
+  const menu = picker.querySelector(".folder-picker-menu");
+  const bounds = trigger.getBoundingClientRect();
+  menu.style.left = `${Math.max(6, Math.min(bounds.left, window.innerWidth - bounds.width - 6))}px`;
+  menu.style.width = `${bounds.width}px`;
+  menu.style.top = `${bounds.bottom + 4}px`;
+  requestAnimationFrame(() => {
+    const menuBounds = menu.getBoundingClientRect();
+    if (menuBounds.bottom > window.innerHeight - 6) {
+      menu.style.top = `${Math.max(6, bounds.top - menuBounds.height - 4)}px`;
+    }
+  });
+}
+
+function addOption(select, value, text, color = "") {
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = text;
+  if (color) {
+    option.dataset.folderColor = "true";
+    option.style.setProperty("--option-folder-color", color);
+    option.style.color = color;
+  }
+  select.append(option);
 }
 
 function renderItems() {
@@ -645,20 +785,71 @@ function renderItems() {
   root.replaceChildren();
   const activeProducts = data.products.filter(product => !product.archived);
   const archivedProducts = data.products.filter(product => product.archived);
-  const activeIds = new Set(activeProducts.map(product => product.id));
+  const search = document.getElementById("productSearch").value.trim().toLocaleLowerCase("pt-BR");
+  const filter = document.getElementById("productFilter").value;
+  const sort = document.getElementById("productSort").value;
+  const offersByProduct = new Map();
+  data.items.forEach(item => {
+    const productId = item.productId || item.productGroupId;
+    if (!offersByProduct.has(productId)) offersByProduct.set(productId, []);
+    offersByProduct.get(productId).push(item);
+  });
+  const productOffers = product => offersByProduct.get(product.id) || [];
+  const textMatches = product => {
+    if (!search) return true;
+    return [product.name, ...productOffers(product).flatMap(item => [item.offerLabel, item.url, getSiteHost(item.url)])]
+      .some(value => String(value || "").toLocaleLowerCase("pt-BR").includes(search));
+  };
+  const filterMatches = product => {
+    const offers = productOffers(product);
+    if (filter === "stale") return offers.some(item => item.lastCheckError || isItemStale(item));
+    if (filter === "target") return offers.some(item => item.target != null && item.price && Number(item.price.amount) <= Number(item.target));
+    if (filter === "available") return offers.some(item => item.availability === "in-stock");
+    if (filter === "out") return offers.some(item => item.availability === "out-of-stock");
+    return true;
+  };
+  const visibleProducts = activeProducts.filter(product => textMatches(product) && filterMatches(product));
+  const visibleArchived = filter === "all" ? archivedProducts.filter(textMatches) : [];
+  const activeIds = new Set(visibleProducts.map(product => product.id));
   const total = data.items.filter(item => activeIds.has(item.productId || item.productGroupId)).length;
-  const productCount = activeProducts.length;
+  const productCount = visibleProducts.length;
   const summary = document.getElementById("itemsSummary");
-  summary.textContent = `${productCount} ${productCount === 1 ? "produto" : "produtos"} · ${total} ${total === 1 ? "URL" : "URLs"} · ${data.folders.length} ${data.folders.length === 1 ? "pasta" : "pastas"}`;
-  document.getElementById("emptyState").classList.toggle("hidden", productCount > 0 || data.folders.length > 0 || archivedProducts.length > 0);
-  if (!productCount && !data.folders.length && !archivedProducts.length) { updateRefreshAllButton(); return; }
+  const activeControls = Boolean(search || filter !== "all");
+  summary.textContent = activeControls
+    ? `${productCount} de ${activeProducts.length} produtos · ${total} ${total === 1 ? "URL" : "URLs"}`
+    : `${productCount} ${productCount === 1 ? "produto" : "produtos"} · ${total} ${total === 1 ? "URL" : "URLs"} · ${data.folders.length} ${data.folders.length === 1 ? "pasta" : "pastas"}`;
+  const emptyState = document.getElementById("emptyState");
+  emptyState.textContent = activeControls ? "Nenhum produto corresponde à busca ou aos filtros." : "Nenhum produto ainda. Adicione uma página ou crie um produto para começar.";
+  const hasVisibleFolder = !activeControls && data.folders.length > 0;
+  emptyState.classList.toggle("hidden", productCount > 0 || visibleArchived.length > 0 || hasVisibleFolder);
+  if (!productCount && !hasVisibleFolder && !visibleArchived.length) { updateRefreshAllButton(); return; }
 
-  const productsForFolder = folderId => activeProducts.filter(product => (product.folderId || NO_FOLDER) === folderId);
-  const groups = data.folders.map((folder, index) => ({ id: folder.id, name: folder.name, color: getFolderColor(folder, index), products: productsForFolder(folder.id) }));
-  const unfiled = productsForFolder(NO_FOLDER).concat(activeProducts.filter(product => !data.folders.some(folder => folder.id === product.folderId) && product.folderId !== NO_FOLDER));
+  const groups = data.folders.map((folder, index) => ({ id: folder.id, name: folder.name, color: getFolderColor(folder, index), products: visibleProducts.filter(product => (product.folderId || NO_FOLDER) === folder.id) }));
+  const unfiled = visibleProducts.filter(product => (product.folderId || NO_FOLDER) === NO_FOLDER || !data.folders.some(folder => folder.id === product.folderId));
   if (unfiled.length) groups.push({ id: NO_FOLDER, name: "Sem pasta", color: "#9b9b9b", products: unfiled });
 
-  groups.sort((a, b) => b.products.length - a.products.length || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
+  const getComparablePrice = product => {
+    const offers = productOffers(product).filter(item => item.availability !== "out-of-stock" && Number(item.price?.amount) > 0);
+    const currency = offers.find(item => item.price?.currency)?.price.currency || "";
+    const comparable = offers.filter(item => !currency || !item.price.currency || item.price.currency === currency);
+    return comparable.length ? Math.min(...comparable.map(item => Number(item.price.amount))) : Infinity;
+  };
+  const latestCheck = product => Math.max(0, ...productOffers(product).map(item => Date.parse(item.price?.checkedAt || "") || 0));
+  const productSort = (a, b) => {
+    if (sort === "name") return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    if (sort === "price") return getComparablePrice(a) - getComparablePrice(b) || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    if (sort === "updated") return latestCheck(b) - latestCheck(a) || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    if (sort === "target") return (a.target == null ? Infinity : Number(a.target)) - (b.target == null ? Infinity : Number(b.target)) || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+  };
+  groups.sort((a, b) => {
+    if (sort === "folder") return b.products.length - a.products.length || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    if (!a.products.length || !b.products.length) return a.products.length ? -1 : b.products.length ? 1 : a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    return productSort(a.products[0], b.products[0]);
+  });
+  if (activeControls) {
+    for (let index = groups.length - 1; index >= 0; index -= 1) if (!groups[index].products.length) groups.splice(index, 1);
+  }
 
   groups.forEach(groupData => {
     const section = document.createElement("details");
@@ -676,16 +867,16 @@ function renderItems() {
     section.addEventListener("toggle", () => { if (section.open) collapsedGroups.delete(groupData.id); else collapsedGroups.add(groupData.id); });
     const cards = document.createElement("div"); cards.className = "folder-section-items";
     if (groupData.products.length) [...groupData.products]
-      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }))
-      .forEach(product => cards.append(buildProductCard(product, data.items.filter(item => (item.productId || item.productGroupId) === product.id), groupData.color)));
+      .sort(productSort)
+      .forEach(product => cards.append(buildProductCard(product, productOffers(product), groupData.color)));
     else { const empty = document.createElement("div"); empty.className = "folder-empty"; empty.textContent = "Nenhum item nesta pasta ainda."; cards.append(empty); }
     section.append(cards); root.append(section);
   });
-  if (archivedProducts.length) {
+  if (visibleArchived.length) {
     const archive = document.createElement("details"); archive.className = "archive-section";
-    const heading = document.createElement("summary"); heading.textContent = "Arquivados (" + archivedProducts.length + ")";
+    const heading = document.createElement("summary"); heading.textContent = "Arquivados (" + visibleArchived.length + ")";
     const cards = document.createElement("div"); cards.className = "archive-list";
-    [...archivedProducts].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" })).forEach(product => cards.append(buildProductCard(product, data.items.filter(item => (item.productId || item.productGroupId) === product.id), "#777777", true)));
+    [...visibleArchived].sort(productSort).forEach(product => cards.append(buildProductCard(product, productOffers(product), "#777777", true)));
     archive.append(heading, cards); root.append(archive);
   }
   updateRefreshAllButton();
@@ -723,7 +914,19 @@ function buildProductCard(product, offers, folderColor, archived = false) {
   } else source.textContent = `${offers.length} ${offers.length === 1 ? "loja" : "lojas"} · ${offers.length ? "preço ainda não lido" : "adicione a primeira URL"}`;
   const priceWrap = document.createElement("span"); priceWrap.className = "product-summary-price-wrap";
   const price = document.createElement("span"); price.className = "product-summary-price"; price.textContent = summaryOffer ? formatPrice(summaryOffer.price.amount, summaryOffer.price.currency) : "—"; priceWrap.append(price);
-  if (summaryOffer && !best) { const status = document.createElement("small"); status.className = "freshness-badge stale"; status.textContent = summaryOffer.lastCheckError ? "falha recente" : "desatualizado"; priceWrap.append(status); }
+  if (summaryOffer) {
+    const checkState = refreshStates.get(summaryOffer.id);
+    if (checkState || !best) {
+      const status = document.createElement("small");
+      status.className = "freshness-badge " + (checkState?.state === "error" || summaryOffer.lastCheckError ? "failed" : checkState?.state === "review" || !best ? "stale" : "fresh");
+      status.textContent = checkState?.state === "loading" ? "atualizando…"
+        : checkState?.state === "review" ? "revisar preço"
+          : checkState?.state === "success" ? "atualizado agora"
+            : summaryOffer.lastCheckError ? "falha recente"
+              : "desatualizado";
+      priceWrap.append(status);
+    }
+  }
   const historyCompare = best ? getHistoricalLow(best) : null;
   if (historyCompare) {
     const badge = document.createElement("small"); badge.className = historyCompare.isLow ? "product-low-badge" : "product-above-low-badge";
@@ -731,7 +934,9 @@ function buildProductCard(product, offers, folderColor, archived = false) {
     badge.title = `Comparação com o menor registrado nesta loja (${best.offerLabel || getSiteHost(best.url)}): ${formatPrice(historyCompare.minimum, best.price.currency)}.`;
     priceWrap.append(badge);
   }
-  identity.append(titleWrap, source); summary.append(arrow, identity, priceWrap); card.append(summary);
+  identity.append(titleWrap, source);
+  summary.append(arrow, identity, priceWrap);
+  card.append(summary);
   card.addEventListener("toggle", () => {
     if (card.open) { expandedProducts.add(product.id); void cacheFavicons(offers); }
     else expandedProducts.delete(product.id);
@@ -739,6 +944,24 @@ function buildProductCard(product, offers, folderColor, archived = false) {
 
   const body = document.createElement("div"); body.className = "product-card-body";
   body.append(buildProductSettings(product, offers, archived));
+  if (offers.length > 1 && !archived) {
+    const refreshRow = document.createElement("div"); refreshRow.className = "product-refresh-row";
+    const refreshLabel = document.createElement("span"); refreshLabel.textContent = `${offers.length} lojas neste produto`;
+    const refreshOffers = document.createElement("button");
+    refreshOffers.type = "button";
+    refreshOffers.className = "icon-button product-refresh-all" + (productRefreshStates.has(product.id) ? " is-loading" : "");
+    refreshOffers.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 8A6.3 6.3 0 0 0 5.1 5.2L3.5 7M3.5 7V3.8M3.5 7h3.2M3.8 12A6.3 6.3 0 0 0 14.9 14.8l1.6-1.8m0 0v3.2m0-3.2h-3.2"/></svg>';
+    refreshOffers.title = `Atualizar as ${offers.length} lojas deste produto`;
+    refreshOffers.setAttribute("aria-label", refreshOffers.title);
+    refreshOffers.disabled = isBatchUpdating || productRefreshStates.has(product.id);
+    refreshOffers.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      void refreshProductOffers(product, offers);
+    });
+    refreshRow.append(refreshLabel, refreshOffers);
+    body.append(refreshRow);
+  }
   const offerList = document.createElement("div"); offerList.className = "offer-list";
   const sortedOffers = [...offers].sort((a, b) => {
     const aAvailable = a.availability === "out-of-stock" ? 1 : 0, bAvailable = b.availability === "out-of-stock" ? 1 : 0;
@@ -774,7 +997,7 @@ function buildProductSettings(product, offers, archived = false) {
     offers.forEach(item => { item.folderId = product.folderId; });
     await persist(); renderItems();
   });
-  folderLabel.append(folder);
+  folderLabel.append(folder); syncFolderPicker(folder);
   const remove = document.createElement("button"); remove.type = "button"; remove.className = "icon-action danger delete-product"; remove.textContent = "×"; remove.title = "Excluir produto"; remove.setAttribute("aria-label", "Excluir produto");
   remove.addEventListener("click", async () => {
     const offerCount = offers.length ? `${offers.length} ${offers.length === 1 ? "URL" : "URLs"}` : "nenhuma URL";
@@ -788,7 +1011,24 @@ function buildProductSettings(product, offers, archived = false) {
   muteInput.addEventListener("change", async () => { product.alertsMuted = muteInput.checked; await persist(); });
   mute.append(muteInput, document.createTextNode("Silenciar alertas deste produto"));
   const archiveButton = document.createElement("button"); archiveButton.type = "button"; archiveButton.className = "secondary archive-product"; archiveButton.textContent = archived ? "Restaurar" : "✓ Comprado"; archiveButton.title = archived ? "Restaurar produto aos monitorados" : "Marcar como comprado e arquivar";
-  archiveButton.addEventListener("click", async () => { product.archived = !archived; product.archiveReason = archived ? "" : "purchased"; product.archivedAt = archived ? null : new Date().toISOString(); await persist(); renderItems(); showToast(archived ? "Produto restaurado." : "Produto marcado como comprado e arquivado com histórico preservado."); });
+  archiveButton.addEventListener("click", async () => {
+    const previous = { archived: product.archived, archiveReason: product.archiveReason, archivedAt: product.archivedAt };
+    product.archived = !archived;
+    product.archiveReason = archived ? "" : "purchased";
+    product.archivedAt = archived ? null : new Date().toISOString();
+    await persist();
+    renderItems();
+    showToast(archived ? "Produto restaurado." : "Produto marcado como comprado e arquivado.", false, {
+      label: "Desfazer",
+      run: async () => {
+        const current = data.products.find(row => row.id === product.id);
+        if (!current) return;
+        Object.assign(current, previous);
+        await persist();
+        renderItems();
+      }
+    });
+  });
   const actions = document.createElement("div"); actions.className = "product-settings-actions"; actions.append(mute, archiveButton, remove);
   row.append(targetLabel, folderLabel, actions); return row;
 }
@@ -822,12 +1062,13 @@ function buildOfferAccordion(item, folderColor) {
   const details = document.createElement("details"); details.className = "offer-accordion"; details.open = expandedOffers.has(item.id);
   const summary = document.createElement("summary"); summary.className = "offer-summary";
   const arrow = document.createElement("span"); arrow.className = "offer-arrow"; arrow.setAttribute("aria-hidden", "true");
+  const offerCard = buildItemCard(item, folderColor, { asOffer: true });
   const store = document.createElement("strong"); store.className = "offer-store"; store.textContent = item.offerLabel || getSiteHost(item.url);
   const renameStore = document.createElement("button"); renameStore.type = "button"; renameStore.className = "product-edit-button offer-edit-button"; renameStore.title = "Editar nome desta loja"; renameStore.setAttribute("aria-label", "Editar nome desta loja");
   renameStore.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.9 2.1 3 3M2 14l3.2-.7L13.7 4.8a1.6 1.6 0 0 0-2.3-2.3L2.9 11 2 14Z"/></svg>';
   renameStore.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); startOfferRename(store.parentElement, item); });
-  const checked = document.createElement("small"); checked.className = "offer-checked"; checked.textContent = item.price?.checkedAt ? `Verificado ${formatDate(item.price.checkedAt)}` : "Ainda não verificado";
   const price = document.createElement("strong"); price.className = "offer-price"; price.textContent = item.price ? formatPrice(item.price.amount, item.price.currency) : "Sem preço";
+  const priceWrap = document.createElement("span"); priceWrap.className = "offer-summary-price-wrap"; priceWrap.append(price);
   const correctPrice = document.createElement("button"); correctPrice.type = "button"; correctPrice.className = "offer-price-edit"; correctPrice.title = "Corrigir preço manualmente"; correctPrice.setAttribute("aria-label", correctPrice.title);
   correctPrice.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.9 2.1 3 3M2 14l3.2-.7L13.7 4.8a1.6 1.6 0 0 0-2.3-2.3L2.9 11 2 14Z"/></svg>';
   correctPrice.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); details.querySelector(".price-correct")?.click(); });
@@ -835,12 +1076,18 @@ function buildOfferAccordion(item, folderColor) {
   link.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); chrome.tabs.create({ url: item.url }); });
   const left = document.createElement("span"); left.className = "offer-summary-copy";
   const storeLine = document.createElement("span"); storeLine.className = "offer-summary-storeline"; appendStoreIcon(storeLine, item); storeLine.append(store, renameStore);
-  const freshness = document.createElement("small"); freshness.className = "freshness-badge " + (item.lastCheckError ? "failed" : isItemStale(item) ? "stale" : item.price ? "fresh" : "unknown");
-  freshness.textContent = item.lastCheckError ? "falha · último preço mantido" : isItemStale(item) ? (item.price ? "preço desatualizado" : "sem preço verificado") : "preço recente";
-  left.append(storeLine, checked, freshness);
+  const checkState = refreshStates.get(item.id);
+  const freshness = document.createElement("small");
+  freshness.className = "freshness-badge " + (checkState?.state === "error" || item.lastCheckError ? "failed" : checkState?.state === "review" ? "stale" : checkState?.state === "success" ? "fresh" : isItemStale(item) ? "stale" : item.price ? "fresh" : "unknown");
+  freshness.textContent = checkState?.state === "loading" ? "atualizando preço…"
+    : checkState?.state === "review" ? "preço precisa de revisão"
+      : checkState?.state === "success" ? "atualizado agora"
+        : item.lastCheckError ? "falha · último preço mantido"
+          : isItemStale(item) ? (item.price ? "preço desatualizado" : "sem preço verificado") : "preço recente";
+  left.append(storeLine, freshness);
   details.addEventListener("toggle", () => { if (details.open) expandedOffers.add(item.id); else expandedOffers.delete(item.id); });
-  if (item.availability !== "unknown") { const stock = document.createElement("small"); stock.className = "stock-badge " + (item.availability === "out-of-stock" ? "out" : "in"); stock.textContent = item.availability === "out-of-stock" ? "esgotado" : "disponível"; left.append(stock); }
-  summary.append(arrow, left, price, correctPrice, link); details.append(summary, buildItemCard(item, folderColor, { asOffer: true })); return details;
+  if (item.availability !== "unknown") { const stock = document.createElement("small"); stock.className = "stock-badge " + (item.availability === "out-of-stock" ? "out" : "in"); stock.textContent = item.availability === "out-of-stock" ? "esgotado" : "disponível"; priceWrap.append(stock); }
+  summary.append(arrow, left, priceWrap, correctPrice, link); details.append(summary, offerCard); return details;
 }
 
 function startOfferRename(container, item) {
@@ -904,8 +1151,8 @@ function updateRefreshAllButton() {
   if (!button) return;
   const eligible = data.items.filter(item => !data.products.find(product => product.id === (item.productId || item.productGroupId))?.archived);
   button.disabled = isBatchUpdating || eligible.length === 0;
-  button.textContent = isBatchUpdating ? button.textContent : "Atualizar tudo";
-  button.title = eligible.length ? `Atualizar as ${eligible.length} URLs ativas` : "Adicione um item para habilitar a atualização";
+  button.title = isBatchUpdating ? "Atualização em lote em andamento" : eligible.length ? `Atualizar as ${eligible.length} URLs ativas` : "Adicione um item para habilitar a atualização";
+  button.setAttribute("aria-label", button.title);
 }
 
 function getDiscountPercent(item) {
@@ -1036,12 +1283,12 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
     targetLabel.append(targetInput);
     folderLabel = document.createElement("label"); folderLabel.textContent = "Pasta";
     const folderSelect = document.createElement("select"); fillFolderSelect(folderSelect, item.folderId || NO_FOLDER, true);
-    folderSelect.addEventListener("change", async () => { getProductSiblings(item).forEach(sibling => { sibling.folderId = folderSelect.value; }); await persist(); renderAll(); }); folderLabel.append(folderSelect);
+    folderSelect.addEventListener("change", async () => { getProductSiblings(item).forEach(sibling => { sibling.folderId = folderSelect.value; }); await persist(); renderAll(); }); folderLabel.append(folderSelect); syncFolderPicker(folderSelect);
   }
-  const refresh = document.createElement("button"); refresh.className = "primary item-refresh" + (isBatchUpdating ? " is-loading" : ""); refresh.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 8A6.3 6.3 0 0 0 5.1 5.2L3.5 7M3.5 7V3.8M3.5 7h3.2M3.8 12A6.3 6.3 0 0 0 14.9 14.8l1.6-1.8m0 0v3.2m0-3.2h-3.2"/></svg>'; refresh.title = isBatchUpdating ? "Atualização em andamento" : "Atualizar preço"; refresh.setAttribute("aria-label", refresh.title); refresh.disabled = isBatchUpdating;
+  const refresh = document.createElement("button"); refresh.className = (options.asOffer ? "secondary" : "primary") + " item-refresh" + (isBatchUpdating ? " is-loading" : ""); refresh.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16.2 8A6.3 6.3 0 0 0 5.1 5.2L3.5 7M3.5 7V3.8M3.5 7h3.2M3.8 12A6.3 6.3 0 0 0 14.9 14.8l1.6-1.8m0 0v3.2m0-3.2h-3.2"/></svg>'; refresh.title = isBatchUpdating ? "Atualização em andamento" : "Atualizar preço"; refresh.setAttribute("aria-label", refresh.title); refresh.disabled = isBatchUpdating;
   refresh.addEventListener("click", () => refreshPrice(item, refresh));
-  const remove = document.createElement("button"); remove.className = "icon-action danger"; remove.textContent = "×"; remove.title = "Remover item"; remove.setAttribute("aria-label", `Remover ${item.name}`);
-  remove.addEventListener("click", async () => { if (!confirm(`Remover a oferta “${item.offerLabel || getSiteHost(item.url)}” e seu histórico local?`)) return; data.items = data.items.filter(row => row.id !== item.id); await persist(); renderAll(); });
+  const remove = document.createElement("button"); remove.type = "button"; remove.className = `icon-action danger${options.asOffer ? " offer-remove-action" : ""}`; remove.textContent = "×"; remove.title = options.asOffer ? "Remover esta loja" : "Remover item"; remove.setAttribute("aria-label", `Remover ${item.offerLabel || getSiteHost(item.url)}`);
+  remove.addEventListener("click", async event => { event.preventDefault(); event.stopPropagation(); if (!confirm(`Remover a oferta “${item.offerLabel || getSiteHost(item.url)}” e seu histórico local?`)) return; data.items = data.items.filter(row => row.id !== item.id); await persist(); renderAll(); });
   if (targetLabel) controls.append(targetLabel, folderLabel);
   if (options.asOffer) {
     const preferences = document.createElement("div"); preferences.className = "offer-preferences";
@@ -1054,9 +1301,9 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
     const muteInput = document.createElement("input"); muteInput.type = "checkbox"; muteInput.checked = item.alertsMuted === true; muteInput.addEventListener("change", async () => { item.alertsMuted = muteInput.checked; await persist(); });
     mute.title = "Silenciar alertas desta loja";
     mute.append(muteInput, document.createTextNode("Silenciar loja"));
-    preferences.append(stockLabel, mute);
-    const row = document.createElement("div"); row.className = "offer-detail-actions"; row.append(refresh, remove);
-    card.append(preferences, row);
+    preferences.append(stockLabel, mute, refresh);
+    preferences.append(remove);
+    card.append(preferences);
   } else controls.append(refresh, remove);
   if (!options.asOffer) card.append(controls);
   const history = document.createElement("details"); history.className = "history";
@@ -1140,6 +1387,8 @@ function buildHistoryChart(item) {
 
 async function refreshPrice(item, button, options = {}) {
   if (button) { button.disabled = true; button.classList.add("is-loading"); button.title = "Lendo preço…"; button.setAttribute("aria-label", "Lendo preço"); }
+  refreshStates.set(item.id, { state: "loading" });
+  if (options.rerender !== false) renderItems();
   let tabId;
   try {
     const url = new URL(item.url);
@@ -1168,6 +1417,7 @@ async function refreshPrice(item, button, options = {}) {
     const anomaly = settings.priceAnomalyGuardEnabled ? isSuspiciousPriceChange(prior, found, settings.priceAnomalyThresholdPercent) : null;
     if (anomaly) {
       item.pendingPriceCandidate = { ...found, regularPrice: extractedRegularPrice, checkedAt, changePercent: anomaly.changePercent, direction: anomaly.direction };
+      refreshStates.set(item.id, { state: "review" });
       delete item.lastCheckError;
       delete item.lastCheckErrorAt;
       await persist();
@@ -1189,6 +1439,7 @@ async function refreshPrice(item, button, options = {}) {
     item.history = Array.isArray(item.history) ? item.history : [];
     item.history.push({ amount: found.amount, currency: found.currency || "", checkedAt, source: found.source || "página", confidence: found.confidence || "unknown" });
     if (item.history.length > 300) item.history = item.history.slice(-300);
+    refreshStates.set(item.id, { state: "success" });
     await persist();
     if (options.rerender !== false) renderItems();
     const alertPayload = alert
@@ -1198,6 +1449,7 @@ async function refreshPrice(item, button, options = {}) {
     if (!options.suppressToast) showToast(`${formatPrice(found.amount, found.currency)} registrado${priceDropped ? " · preço caiu" : ""}${alert?.kind === "target" ? " · atingiu o alvo" : alert?.kind === "new-low" ? " · novo menor preço" : ""}.`);
     return { ok: true, price: found, alert: alertPayload };
   } catch (error) {
+    refreshStates.set(item.id, { state: "error" });
     item.lastCheckError = error.message || "Falha na verificação.";
     item.lastCheckErrorAt = new Date().toISOString();
     await persist().catch(() => {});
@@ -1224,8 +1476,19 @@ async function refreshAllItems() {
   if (!origins.length) return showToast("Nenhum item tem um endereço HTTP/HTTPS válido.", true);
   isBatchUpdating = true;
   button.disabled = true;
-  button.textContent = "Preparando…";
   button.setAttribute("aria-busy", "true");
+  button.classList.add("is-loading");
+  button.title = "Preparando atualização em lote…";
+  button.setAttribute("aria-label", button.title);
+  const progressPanel = document.getElementById("batchProgress");
+  const progressText = document.getElementById("batchProgressText");
+  const progressCount = document.getElementById("batchProgressCount");
+  const progressBar = document.getElementById("batchProgressBar");
+  progressPanel.classList.remove("hidden");
+  progressText.textContent = "Solicitando acesso aos sites…";
+  progressCount.textContent = `0 / ${items.length}`;
+  progressBar.max = items.length;
+  progressBar.value = 0;
   renderItems();
   let updated = 0;
   let failed = 0;
@@ -1236,11 +1499,15 @@ async function refreshAllItems() {
     const allowed = await chrome.permissions.request({ origins });
     if (!allowed) throw new Error("A permissão para um ou mais sites não foi concedida.");
     for (let index = 0; index < items.length; index += 1) {
-      button.textContent = `Atualizando ${index + 1}/${items.length}`;
+      progressText.textContent = `Lendo ${items[index].offerLabel || getSiteHost(items[index].url)}…`;
+      refreshStates.set(items[index].id, { state: "loading" });
+      renderItems();
       const result = await refreshPrice(items[index], null, { permissionGranted: true, suppressToast: true, suppressAlerts: true, rerender: false });
       if (result.reviewRequired) reviewRequired += 1;
       else if (result.ok) { updated += 1; if (result.alert && !itemAlertsMuted(items[index])) alerts.push(result.alert); }
       else { failed += 1; failedNames.push(items[index].name); }
+      progressCount.textContent = `${index + 1} / ${items.length}`;
+      progressBar.value = index + 1;
       renderItems();
     }
     if ((settings.priceAlertsEnabled || settings.priceAlertSoundEnabled) && alerts.length && !getQuietHoursActive()) {
@@ -1255,13 +1522,83 @@ async function refreshAllItems() {
     const failedSummary = failedNames.length ? ` · Falha: ${failedNames.slice(0, 2).join(", ")}${failedNames.length > 2 ? "…" : ""}` : "";
     const updatedLabel = updated === 1 ? "1 item atualizado" : `${updated} itens atualizados`;
     const reviewSummary = reviewRequired ? ` · ${reviewRequired} para revisar` : "";
+    progressText.textContent = `${updatedLabel}${reviewSummary}${failed ? ` · ${failed} falharam` : " · tudo concluído"}.`;
     showToast(`${updatedLabel}${reviewSummary}${failed ? ` · ${failed} ${failed === 1 ? "falhou" : "falharam"}${failedSummary}` : ""}.`, failed > 0);
   } catch (error) {
+    progressText.textContent = error.message || "Não foi possível iniciar a atualização em lote.";
     showToast(error.message || "Não foi possível iniciar a atualização em lote.", true);
   } finally {
     isBatchUpdating = false;
     button.removeAttribute("aria-busy");
-    button.textContent = "Atualizar tudo";
+    button.classList.remove("is-loading");
+    renderAll();
+  }
+}
+
+async function refreshProductOffers(product, offers) {
+  if (isBatchUpdating || productRefreshStates.has(product.id)) return;
+  const origins = [...new Set(offers.flatMap(item => {
+    try {
+      const url = new URL(item.url);
+      return /^https?:$/.test(url.protocol) ? [`${url.origin}/*`] : [];
+    } catch { return []; }
+  }))];
+  if (!origins.length) return showToast("Nenhuma loja tem um endereço HTTP/HTTPS válido.", true);
+
+  isBatchUpdating = true;
+  productRefreshStates.add(product.id);
+  const progressPanel = document.getElementById("batchProgress");
+  const progressText = document.getElementById("batchProgressText");
+  const progressCount = document.getElementById("batchProgressCount");
+  const progressBar = document.getElementById("batchProgressBar");
+  progressPanel.classList.remove("hidden");
+  progressText.textContent = `Atualizando lojas de ${product.name}…`;
+  progressCount.textContent = `0 / ${offers.length}`;
+  progressBar.max = offers.length;
+  progressBar.value = 0;
+  renderItems();
+
+  let updated = 0;
+  let failed = 0;
+  let reviewRequired = 0;
+  const alerts = [];
+  try {
+    const allowed = await chrome.permissions.request({ origins });
+    if (!allowed) throw new Error("A permissão para uma ou mais lojas não foi concedida.");
+
+    for (let index = 0; index < offers.length; index += 1) {
+      const item = offers[index];
+      progressText.textContent = `Lendo ${item.offerLabel || getSiteHost(item.url)}…`;
+      refreshStates.set(item.id, { state: "loading" });
+      renderItems();
+      const result = await refreshPrice(item, null, { permissionGranted: true, suppressToast: true, suppressAlerts: true, rerender: false });
+      if (result.reviewRequired) reviewRequired += 1;
+      else if (result.ok) {
+        updated += 1;
+        if (result.alert && !itemAlertsMuted(item)) alerts.push(result.alert);
+      } else failed += 1;
+      progressCount.textContent = `${index + 1} / ${offers.length}`;
+      progressBar.value = index + 1;
+      renderItems();
+    }
+
+    if ((settings.priceAlertsEnabled || settings.priceAlertSoundEnabled) && alerts.length && !getQuietHoursActive()) {
+      sendPriceAlert({
+        kind: "summary",
+        badgeText: alerts.some(alert => alert.kind === "target") ? "!" : "↓",
+        itemName: `${alerts.length} ${alerts.length === 1 ? "loja teve" : "lojas tiveram"} uma condição de alerta`,
+        price: `Produto: ${product.name}`
+      });
+    }
+    const resultText = `${updated} ${updated === 1 ? "loja atualizada" : "lojas atualizadas"}${reviewRequired ? ` · ${reviewRequired} para revisar` : ""}${failed ? ` · ${failed} falharam` : ""}.`;
+    progressText.textContent = resultText;
+    showToast(resultText, failed > 0);
+  } catch (error) {
+    progressText.textContent = error.message || "Não foi possível atualizar as lojas do produto.";
+    showToast(error.message || "Não foi possível atualizar as lojas do produto.", true);
+  } finally {
+    productRefreshStates.delete(product.id);
+    isBatchUpdating = false;
     renderAll();
   }
 }
@@ -1557,7 +1894,8 @@ function parseUserPrice(value) {
   if (clean.includes(",") && clean.includes(".")) normalized = clean.lastIndexOf(",") > clean.lastIndexOf(".") ? clean.replace(/\./g, "").replace(",", ".") : clean.replace(/,/g, "");
   else if (clean.includes(",")) normalized = clean.replace(",", ".");
   const amount = Number(normalized);
-  return Number.isFinite(amount) && amount >= 0 ? { amount, currency: "" } : null;
+  const roundedAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
+  return Number.isFinite(roundedAmount) && roundedAmount >= 0 ? { amount: roundedAmount, currency: "" } : null;
 }
 
 function formatPrice(amount, currency) {
@@ -1567,5 +1905,22 @@ function formatPrice(amount, currency) {
 }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.valueOf()) ? "data desconhecida" : date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }); }
 function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function showToast(message, isError = false) { const toast = document.getElementById("toast"); toast.textContent = message; toast.classList.toggle("error", isError); toast.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove("show"), 3300); }
+function showToast(message, isError = false, undoAction = null) {
+  const toast = document.getElementById("toast");
+  const copy = document.createElement("span"); copy.textContent = message;
+  toast.replaceChildren(copy);
+  if (undoAction) {
+    const undo = document.createElement("button"); undo.type = "button"; undo.className = "toast-action"; undo.textContent = undoAction.label;
+    undo.addEventListener("click", async () => {
+      undo.disabled = true;
+      try { await undoAction.run(); showToast("Ação desfeita."); }
+      catch { showToast("Não foi possível desfazer a ação.", true); }
+    });
+    toast.append(undo);
+  }
+  toast.classList.toggle("error", isError);
+  toast.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("show"), undoAction ? 6500 : 3300);
+}
 function formatBytes(bytes) { return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(2)} MB`; }

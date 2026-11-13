@@ -21,10 +21,13 @@ function extractPageInfo(selector) {
       } else if (groups[1]?.length === 3) number = groups.join("");
     }
     const amount = Number(number);
-    return Number.isFinite(amount) && amount > 0 && amount < 100000000 ? { amount, currency } : null;
+    const roundedAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
+    return Number.isFinite(roundedAmount) && roundedAmount > 0 && roundedAmount < 100000000 ? { amount: roundedAmount, currency } : null;
   };
 
   const headingNode = document.querySelector("h1");
+  const hostname = location.hostname.toLowerCase();
+  const isMercadoLivre = /(^|\.)mercadolivre\.com\.br$/.test(hostname) || /(^|\.)mercadolibre\./.test(hostname);
   const heading = cleanText(headingNode?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title);
   const title = cleanText(document.querySelector('meta[property="og:title"]')?.content || heading || document.title);
   const iconNode = document.querySelector('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
@@ -93,9 +96,29 @@ function extractPageInfo(selector) {
   }
 
   const visiblePriceCandidates = [];
-  const priceNodes = document.querySelectorAll('[class*="price"], [id*="price"], [class*="money"], ins, [itemprop="price"], [data-price]');
+  const regularLabelPriceCandidates = [];
+  const mercadoLivrePriceNodes = new Set();
+  if (isMercadoLivre) {
+    const selectors = [
+      ".ui-pdp-price__second-line .andes-money-amount",
+      ".ui-pdp-price__main-container .andes-money-amount",
+      '[class*="ui-pdp-price__second-line"] [class*="money-amount"]'
+    ];
+    selectors.forEach(selector => document.querySelectorAll(selector).forEach(node => mercadoLivrePriceNodes.add(node)));
+    mercadoLivrePriceNodes.forEach(node => {
+      if (!node.getClientRects().length || node.closest("s, del, [class*='original-value'], [class*='price--original'], [class*='old-price']")) return;
+      const fraction = node.querySelector(".andes-money-amount__fraction")?.textContent;
+      const cents = node.querySelector(".andes-money-amount__cents")?.textContent;
+      const raw = fraction ? `R$ ${fraction}${cents ? `,${cents}` : ""}` : node.innerText || node.textContent || "";
+      const parsed = parse(raw, "BRL");
+      if (!parsed) return;
+      const inSecondLine = Boolean(node.closest(".ui-pdp-price__second-line, [class*='ui-pdp-price__second-line']"));
+      visiblePriceCandidates.push({ ...parsed, source: "preço visível", confidence: "high", score: inSecondLine ? 280 : 240, isPix: false });
+    });
+  }
+  const priceNodes = document.querySelectorAll('[class*="price"], [id*="price"], [class*="money"], [class*="pix"], [data-testid*="price"], ins, [itemprop="price"], [data-price]');
   priceNodes.forEach(node => {
-    if (!node.getClientRects().length || node.closest("s, del")) return;
+    if (mercadoLivrePriceNodes.has(node) || !node.getClientRects().length || node.closest("s, del")) return;
     const style = getComputedStyle(node);
     if (style.display === "none" || style.visibility === "hidden" || style.textDecorationLine.includes("line-through")) return;
     const raw = node.getAttribute("content") || node.getAttribute("data-price") || node.innerText || node.textContent || "";
@@ -105,17 +128,30 @@ function extractPageInfo(selector) {
     const parsed = parse(raw, node.getAttribute("currency") || "");
     if (!parsed) return;
     const marker = `${node.id || ""} ${typeof node.className === "string" ? node.className : ""} ${node.getAttribute("aria-label") || ""}`.toLowerCase();
+    const nearbyTexts = [];
+    for (let ancestor = node; ancestor && nearbyTexts.length < 4; ancestor = ancestor.parentElement) {
+      const text = cleanText(ancestor.innerText || ancestor.textContent);
+      if (text.length > 240) break;
+      nearbyTexts.push(text);
+    }
+    const context = nearbyTexts.find(text => /\b(?:pix|normal|original|parcel|parcelado|cart[aã]o|cupom)\b/i.test(text)) || "";
+    const isPix = (/\bpix\b/i.test(context) || /\bpix\b/i.test(marker)) && !/cupom|primeira compra|clube|assinante|m[eê]mbro/i.test(context);
+    const isRegular = !isPix && /pre[cç]o\s+(?:anunciado\s+)?normal|pre[cç]o\s+original|\bde\s*R\$/i.test(context);
+    const isInstallment = /\b\d{1,2}x\b|parcela|parcelado|mensal|ao m[eê]s|frete|shipping/i.test(context);
     if (/install|parcel|payment|shipping|freight|compare|original|old-price|was-price/.test(marker)) return;
+    if (isRegular) { regularLabelPriceCandidates.push(parsed); return; }
+    if (isInstallment && !isPix) return;
     let score = productScope?.contains(node) ? 70 : 0;
     if (/sale|current|final|special|promotional|promo|discount/.test(marker) || node.matches("ins")) score += 100;
     else if (/price|money/.test(marker)) score += 25;
     if (/regular|list-price/.test(marker)) score -= 30;
     if (node.matches('[itemprop="price"], [data-price]')) score += 10;
-    visiblePriceCandidates.push({ ...parsed, source: "preço visível", confidence: "high", score });
+    if (isPix) score += 160;
+    visiblePriceCandidates.push({ ...parsed, source: isPix ? "preço Pix visível" : "preço visível", confidence: "high", score, isPix });
   });
   visiblePriceCandidates.sort((a, b) => b.score - a.score);
 
-  const regularPriceCandidates = [];
+  const regularPriceCandidates = [...regularLabelPriceCandidates];
   if (productScope) {
     productScope.querySelectorAll('s, del, [class*="compare-at"], [class*="compare_at"], [class*="old-price"], [class*="was-price"], [class*="price-item--regular"], [class*="regular-price"], [class*="price--regular"]').forEach(node => {
       if (!node.getClientRects().length) return;
@@ -145,7 +181,8 @@ function extractPageInfo(selector) {
     add(node.getAttribute("content") || node.getAttribute("data-price") || node.textContent, node.closest('[itemtype*="Offer"]')?.querySelector('[itemprop="priceCurrency"]')?.content || "", "page markup", "medium");
   });
 
-  const bestVisiblePrice = visiblePriceCandidates.find(candidate => candidate.score >= 60);
+  const bestVisiblePrice = visiblePriceCandidates.find(candidate => candidate.isPix && candidate.score >= 160)
+    || visiblePriceCandidates.find(candidate => candidate.score >= 60);
   const chosen = candidates.find(candidate => candidate.source === "CSS selector")
     || (bestVisiblePrice && { amount: bestVisiblePrice.amount, currency: bestVisiblePrice.currency, source: bestVisiblePrice.source, confidence: bestVisiblePrice.confidence })
     || candidates.find(candidate => candidate.source === "JSON-LD")

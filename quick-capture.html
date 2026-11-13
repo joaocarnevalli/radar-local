@@ -8,7 +8,10 @@
 </head>
 <body>
   <main class="capture-shell">
-    <header><span class="brand-mark">◉</span><div><strong>Radar Local</strong><small>Revisar preço selecionado</small></div></header>
+    <header>
+      <span class="brand-mark" aria-hidden="true"><img src="icons/radar.svg" alt=""></span>
+      <div class="brand-copy"><strong>Radar Local</strong><small>Revisar preço selecionado</small></div>
+    </header>
     <div id="captureStatus" class="status">Lendo seleção…</div>
     <form id="captureForm" class="hidden">
       <label>Produto<input id="captureName" maxlength="140" required></label>
@@ -18,7 +21,7 @@
       <label id="captureFolderLabel">Pasta<select id="captureFolder"></select></label>
       <div class="url" id="captureUrl"></div>
       <div class="actions"><button class="primary" type="submit">Salvar valor</button><button id="cancelCapture" class="secondary" type="button">Cancelar</button></div>
-      <small>Confira se a seleção é o preço atual ou o preço normal antes de salvar. O valor será registrado como entrada manual.</small>
+      <small class="form-note">Confira se a seleção é o preço atual ou o preço normal antes de salvar. O valor será registrado como entrada manual.</small>
     </form>
   </main>
   <script src="quick-capture.js"></script>

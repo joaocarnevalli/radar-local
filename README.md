@@ -7,8 +7,10 @@ O Radar Local é uma extensão gratuita, de código aberto e com armazenamento n
 ## O que você pode fazer
 
 - Salvar a página aberta como um item monitorado; o Radar avisa quando o mesmo endereço já estiver salvo.
+- Usar todas as funções diretamente no popup ou abrir a mesma interface numa aba maior. A aba amplia o espaço de trabalho; pastas, lojas, histórico e configurações também continuam disponíveis na extensão.
 - Organizar itens em pastas personalizadas expansíveis, como **Certificações**, **Cursos** e **Jogos**. Na tela inicial, pastas com mais itens aparecem primeiro; empates e pastas vazias ficam em ordem alfabética. Novas pastas começam em cinza neutro; a cor pode ser escolhida depois na aba **Pastas**. As cores são apenas etiquetas visuais.
 - Definir um preço-alvo, corrigir um preço manualmente e atualizar um item ou todos de uma vez.
+- Buscar produtos e lojas, filtrar por falha/desatualização, preço-alvo e disponibilidade, e ordenar por nome, preço, atualização ou preço-alvo.
 - Exibir a porcentagem de desconto quando a página informa o preço normal e o preço promocional.
 - Consultar o histórico recente de preços e, ao expandi-lo, ver um gráfico local com até 60 pontos recentes e o menor valor observado entre eles.
 - Revisar mudanças grandes: por padrão, uma variação acima de 50% vira um preço candidato, preservando o preço aceito e o histórico até você aceitar ou descartar.
@@ -16,6 +18,7 @@ O Radar Local é uma extensão gratuita, de código aberto e com armazenamento n
 - Definir uma pasta padrão para novos itens.
 - Opcionalmente, atualizar itens desatualizados ao iniciar o navegador, em sequência e no intervalo configurado.
 - Receber notificações opcionais quando um preço cair ou atingir o preço-alvo, com beep curto e indicador no ícone configuráveis.
+- Acompanhar o progresso por loja e da atualização em lote, com estado explícito para falha, preço que precisa de revisão e leitura concluída.
 - Exportar e importar um backup JSON com itens, histórico, pastas e preferências para transferir ou guardar seus dados.
 - Informar um seletor CSS quando o site não apresentar o preço de uma forma que o Radar consiga reconhecer.
 - Opcionalmente, selecionar um texto de preço na página e usar o menu de contexto do Radar para revisar e salvar o valor manualmente.
@@ -83,6 +86,7 @@ Se o site tiver um elemento HTML estável com o preço, você pode informar seu 
 - Os dados não são compartilhados entre dispositivos automaticamente. Use **Exportar backup** e **Importar backup JSON** para transferi-los.
 - O histórico guarda até 300 verificações por item.
 - Produtos podem ser arquivados e restaurados sem apagar ofertas ou histórico. Itens arquivados não entram em atualizações em lote nem na fila automática.
+- Ao arquivar ou restaurar um produto, você pode desfazer a ação pelo aviso temporário. Exclusões e remoção de registros do histórico continuam pedindo confirmação.
 - Cada oferta pode ser marcada manualmente como disponível, esgotada ou sem informação. Ofertas marcadas como esgotadas não são tratadas como menor preço atual.
 - Alertas podem ser silenciados por produto ou por oferta, e há uma janela de silêncio configurável. Verificações e gravação do histórico continuam durante o silêncio.
 - O botão de janela flutuante abre o Radar numa janela do navegador separada, redimensionável e conectada ao mesmo armazenamento local. A primeira abertura solicita a permissão opcional de janelas.
