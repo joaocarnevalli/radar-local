@@ -27,6 +27,9 @@ function extractPageInfo(selector) {
   const headingNode = document.querySelector("h1");
   const heading = cleanText(headingNode?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title);
   const title = cleanText(document.querySelector('meta[property="og:title"]')?.content || heading || document.title);
+  const iconNode = document.querySelector('link[rel~="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+  let faviconUrl = `${location.origin}/favicon.ico`;
+  try { if (iconNode?.href) faviconUrl = new URL(iconNode.href, location.href).href; } catch {}
   const candidates = [];
   const add = (value, currency, source, confidence) => {
     const price = parse(value, currency);
@@ -155,5 +158,38 @@ function extractPageInfo(selector) {
       return null;
     })();
   const regularPrice = chosen ? regularPriceCandidates.filter(value => value.amount > chosen.amount && (!value.currency || !chosen.currency || value.currency === chosen.currency)).sort((a, b) => a.amount - b.amount)[0] || null : null;
-  return { title, price: chosen || null, regularPrice };
+  const corroboratingSources = chosen ? [...new Set([...candidates, ...visiblePriceCandidates]
+    .filter(candidate => candidate.amount === chosen.amount && (!candidate.currency || !chosen.currency || candidate.currency === chosen.currency))
+    .map(candidate => candidate.source))] : [];
+  const price = chosen ? { ...chosen, corroboratingSources, confidence: corroboratingSources.length > 1 ? "corroborated" : chosen.confidence || "unknown" } : null;
+  return { title, price, regularPrice, faviconUrl };
+}
+
+function evaluatePriceAlert(item, current, settings = {}) {
+  const previous = Number(item?.price?.amount);
+  const amount = Number(current?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const currencyMatches = !item?.price?.currency || !current?.currency || item.price.currency === current.currency;
+  const targetCrossed = item?.target != null && amount <= Number(item.target) && (!Number.isFinite(previous) || previous > Number(item.target));
+  const dropPercent = Number.isFinite(previous) && previous > 0 && currencyMatches && amount < previous ? (previous - amount) / previous * 100 : 0;
+  const minimumDrop = Math.min(99, Math.max(0, Number(settings.priceAlertMinDropPercent) || 0));
+  const dropQualified = dropPercent > 0 && dropPercent >= minimumDrop;
+  const oldPrices = (Array.isArray(item?.history) ? item.history : []).filter(point =>
+    Number.isFinite(Number(point.amount)) && Number(point.amount) > 0 &&
+    (!point.currency || !current.currency || point.currency === current.currency));
+  const previousLow = oldPrices.length ? Math.min(...oldPrices.map(point => Number(point.amount))) : currencyMatches ? previous : NaN;
+  const newLow = Number.isFinite(previousLow) && previousLow > 0 && amount < previousLow;
+  if (targetCrossed) return { kind: "target", dropPercent, newLow };
+  if (dropQualified) return { kind: "drop", dropPercent, newLow };
+  if (settings.priceAlertNewLowEnabled === true && newLow) return { kind: "new-low", dropPercent, newLow };
+  return null;
+}
+
+function isSuspiciousPriceChange(previous, candidate, thresholdPercent = 50) {
+  const oldAmount = Number(previous?.amount);
+  const newAmount = Number(candidate?.amount);
+  if (!Number.isFinite(oldAmount) || oldAmount <= 0 || !Number.isFinite(newAmount) || newAmount <= 0) return null;
+  if (previous.currency && candidate.currency && previous.currency !== candidate.currency) return null;
+  const changePercent = Math.abs((newAmount / oldAmount - 1) * 100);
+  return changePercent > thresholdPercent ? { changePercent, direction: newAmount < oldAmount ? "drop" : "increase" } : null;
 }

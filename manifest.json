@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Monitoramento local de preços com pastas personalizadas e histórico.",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "optional_permissions": ["notifications", "offscreen", "contextMenus", "windows"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "icons": {
     "16": "icons/icon-16.png",

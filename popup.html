@@ -12,12 +12,15 @@
     <div class="brand-lockup">
       <span class="brand-mark" aria-hidden="true"><img src="icons/radar.svg" alt=""></span>
       <div class="brand-copy">
-        <div class="brand">Radar <span>Local</span></div>
+        <div class="brand">Radar <span class="brand-local">Local</span></div>
         <div class="privacy">Preços e histórico armazenados localmente</div>
       </div>
     </div>
     <button id="backupExport" class="icon-button" title="Exportar backup" aria-label="Exportar backup">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.75v9.5m0 0 3.5-3.5M10 12.25l-3.5-3.5M3.5 14v2.25h13V14" /></svg>
+    </button>
+    <button id="openFloating" class="icon-button floating-launch" title="Abrir janela flutuante" aria-label="Abrir Radar em janela flutuante">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3.5h5.5V9M16 3.5 9 10.5M15.5 11.5v4.25a.75.75 0 0 1-.75.75H4.25a.75.75 0 0 1-.75-.75V5.25a.75.75 0 0 1 .75-.75H9" /></svg>
     </button>
   </header>
 
@@ -45,13 +48,26 @@
 
       <div class="list-header">
         <div class="list-title-wrap">
-          <div class="section-title">Seus itens</div>
+          <div class="section-title">Seus produtos</div>
           <div id="itemsSummary" class="list-summary"></div>
         </div>
-        <button id="refreshAll" class="secondary refresh-all" type="button" title="Atualizar todos os preços">Atualizar tudo</button>
+        <div class="list-actions">
+          <button id="openNewProduct" class="secondary add-product-button" type="button">＋ Produto</button>
+          <button id="refreshAll" class="secondary refresh-all" type="button" title="Atualizar todos os preços">Atualizar tudo</button>
+        </div>
       </div>
+      <form id="newProductForm" class="new-product-form hidden">
+        <div class="section-title">Criar produto</div>
+        <label>Nome do produto<input id="newProductName" maxlength="140" required placeholder="Ex.: AirPods Pro 3"></label>
+        <div class="two-col">
+          <label>Preço-alvo<input id="newProductTarget" inputmode="decimal" placeholder="Opcional"></label>
+          <label>Pasta<select id="newProductFolder"></select></label>
+        </div>
+        <div class="row-actions"><button class="primary" type="submit">Criar produto</button><button id="cancelNewProduct" class="secondary" type="button">Cancelar</button></div>
+        <div class="hint">Depois, adicione uma ou várias URLs de lojas dentro do produto.</div>
+      </form>
       <div id="itemsList" class="items-list"></div>
-      <div id="emptyState" class="empty-state hidden">Nenhum item ainda. Adicione uma página para começar.</div>
+      <div id="emptyState" class="empty-state hidden">Nenhum produto ainda. Adicione uma página ou crie um produto para começar.</div>
     </section>
 
     <section id="foldersView" class="view">
@@ -67,7 +83,9 @@
       <div id="foldersList" class="folders-list"></div>
       <div class="hint">Ao apagar uma pasta, seus itens vão para “Sem pasta”.</div>
       <div class="backup-row">
-        <button id="backupImport" class="secondary">Importar backup JSON</button>
+        <label for="backupImportMode" class="backup-mode-label">Ao importar</label>
+        <select id="backupImportMode"><option value="merge">Mesclar com os dados atuais</option><option value="replace">Substituir os dados atuais</option></select>
+        <div class="row-actions"><button id="backupImport" class="secondary">Importar backup JSON</button><button id="backupCsv" class="secondary">Exportar CSV</button></div>
         <input id="backupFile" type="file" accept="application/json,.json" class="hidden">
       </div>
     </section>
@@ -84,15 +102,28 @@
         </label>
         <div class="setting-field">
           <label for="startupRefreshPaceMinutes">Intervalo entre páginas</label>
-          <select id="startupRefreshPaceMinutes"><option value="1">1 minuto</option><option value="3">3 minutos</option><option value="5">5 minutos</option><option value="10">10 minutos</option></select>
-          <small>Uma página por vez. A fila continua enquanto o navegador estiver aberto; páginas sem permissão são ignoradas.</small>
+          <div class="pace-controls">
+            <input id="startupRefreshPaceSlider" type="range" min="0.5" max="60" step="0.5" value="5" aria-label="Intervalo entre páginas em minutos">
+            <input id="startupRefreshPaceMinutes" class="compact-number" type="number" min="0.5" max="60" step="0.5" inputmode="decimal" aria-label="Intervalo entre páginas em minutos">
+            <span>min</span>
+          </div>
+          <small>Uma página por vez. Escolha de 30 segundos a 60 minutos. Páginas sem permissão são ignoradas.</small>
+          <small id="startupPaceWarning" class="setting-warning hidden" role="alert">Cuidado: abaixo de 1 minuto, o navegador pode atrasar a fila e várias páginas abertas em sequência podem aumentar o uso de recursos. O intervalo mínimo efetivo é 30 segundos.</small>
         </div>
         <div class="setting-field">
-          <label for="startupRefreshStaleHours">Considerar desatualizado após</label>
-          <select id="startupRefreshStaleHours"><option value="12">12 horas</option><option value="24">24 horas</option><option value="48">48 horas</option><option value="168">7 dias</option></select>
-          <small>Itens verificados mais recentemente serão ignorados.</small>
+          <label for="startupRefreshStaleValue">Considerar desatualizado após</label>
+          <div class="stale-controls">
+            <input id="startupRefreshStaleSlider" type="range" min="1" max="8760" step="1" value="24" aria-label="Tempo para considerar um item desatualizado">
+            <input id="startupRefreshStaleValue" class="compact-number" type="number" min="1" max="8760" step="1" value="24" inputmode="numeric" aria-label="Tempo para considerar um item desatualizado">
+            <select id="startupRefreshStaleUnit" aria-label="Unidade do período"><option value="minutes">min</option><option value="hours">h</option><option value="days">dias</option></select>
+          </div>
+          <small>Escolha de 1 minuto a 365 dias. Períodos curtos colocam mais itens na fila.</small>
         </div>
         <div id="startupRefreshStatus" class="settings-status" role="status"></div>
+        <div id="startupQueueControls" class="queue-controls hidden">
+          <button id="pauseStartupQueue" class="secondary" type="button">Pausar fila</button>
+          <button id="cancelStartupQueue" class="secondary" type="button">Cancelar fila</button>
+        </div>
       </section>
       <section class="settings-card">
         <div class="setting-field">
@@ -101,9 +132,75 @@
           <small>Você ainda pode trocar a pasta ao cadastrar ou depois.</small>
         </div>
       </section>
+      <section class="settings-card">
+        <div class="section-title">Perfis de leitura por site</div>
+        <div class="hint">Um seletor CSS pode ser reutilizado em todas as URLs do mesmo domínio. O seletor salvo no produto continua tendo prioridade.</div>
+        <div id="siteProfilesList" class="site-profiles-list"></div>
+      </section>
+      <section class="settings-card">
+        <div class="section-title">Confiabilidade e histórico</div>
+        <label class="setting-toggle setting-alert-option"><span><strong>Revisar variações suspeitas</strong><small>Uma mudança acima do limite escolhido fica como candidata e não substitui o último preço sem confirmação.</small></span><input id="priceAnomalyGuardEnabled" type="checkbox"></label>
+        <div class="setting-field"><label for="priceAnomalyThresholdPercent">Limite para pedir confirmação</label><div class="compact-value-row"><input id="priceAnomalyThresholdPercent" class="compact-number" type="number" min="10" max="95" step="5" value="50" inputmode="numeric"><span>%</span></div></div>
+        <label class="setting-toggle setting-alert-option"><span><strong>Mostrar origem da leitura</strong><small>Exibe o método e o nível de confiança do preço registrado.</small></span><input id="priceSourceEnabled" type="checkbox"></label>
+        <label class="setting-toggle setting-alert-option"><span><strong>Gráfico no histórico</strong><small>Desenha até 60 pontos quando você expande o histórico.</small></span><input id="priceHistoryChartEnabled" type="checkbox"></label>
+        <label class="setting-toggle setting-alert-option"><span><strong>Menu de contexto para preço selecionado</strong><small>Adiciona “Usar seleção como preço” ao clicar com o botão direito em um texto selecionado.</small></span><input id="contextMenuEnabled" type="checkbox"></label>
+      </section>
+      <section class="settings-card">
+        <div class="section-title">Alertas de preço</div>
+        <label class="setting-toggle setting-alert-option">
+          <span><strong>Notificação e indicador no ícone</strong><small>Avisa quando o preço cai ou cruza o preço-alvo. O indicador some quando você abre o Radar.</small></span>
+          <input id="priceAlertsEnabled" type="checkbox">
+        </label>
+        <label class="setting-toggle setting-alert-option">
+          <span><strong>Som curto</strong><small>Toca um beep quando houver queda de preço ou preço-alvo alcançado. Pode ser silenciado pelo sistema operacional.</small></span>
+          <input id="priceAlertSoundEnabled" type="checkbox">
+        </label>
+        <div class="sound-controls">
+          <label for="priceAlertVolume">Volume do alerta</label>
+          <input id="priceAlertVolume" type="range" min="0" max="100" step="1" value="35" aria-label="Volume do som de alerta">
+          <input id="priceAlertVolumeValue" class="compact-number sound-volume-value" type="number" min="0" max="100" step="1" value="35" inputmode="numeric" aria-label="Volume do som em porcentagem">
+          <button id="testAlertSound" class="secondary sound-test" type="button">▶ Testar som</button>
+          <small id="soundTestStatus" class="sound-test-status" role="status"></small>
+        </div>
+        <div class="setting-field">
+          <label for="priceAlertMinDropPercent">Queda mínima para alertar</label>
+          <div class="compact-value-row"><input id="priceAlertMinDropPercent" class="compact-number" type="number" min="0" max="99" step="1" value="0" inputmode="numeric"><span>%</span></div>
+          <small>0 avisa em qualquer queda. O preço-alvo continua sendo um alerta independente.</small>
+        </div>
+        <label class="setting-toggle setting-alert-option"><span><strong>Avisar ao registrar novo menor preço</strong><small>Compara com o menor valor já guardado no histórico deste item.</small></span><input id="priceAlertNewLowEnabled" type="checkbox"></label>
+        <label class="setting-toggle setting-alert-option"><span><strong>Horário silencioso</strong><small>Durante esse período, o Radar não envia notificações nem toca som. As verificações continuam normalmente.</small></span><input id="quietHoursEnabled" type="checkbox"></label>
+        <div class="quiet-hours-controls"><label>De <input id="quietHoursStart" type="time" value="22:00"></label><label>Até <input id="quietHoursEnd" type="time" value="08:00"></label></div>
+        <div class="setting-field">
+          <label for="priceAlertCooldownMinutes">Intervalo mínimo entre beeps por item</label>
+          <div class="compact-value-row"><input id="priceAlertCooldownMinutes" class="compact-number" type="number" min="0" max="1440" step="1" value="15" inputmode="numeric"><span>min</span></div>
+          <small>0 toca em todo novo alerta; alcançar o preço-alvo sempre toca. Notificações visuais continuam seguindo cada alerta.</small>
+        </div>
+        <div class="setting-field">
+          <label for="priceAlertSoundStyle">Tipo de som</label>
+          <select id="priceAlertSoundStyle"><option value="radar">Radar · dois tons</option><option value="chime">Sino suave</option><option value="double">Duplo digital</option><option value="rise">Sequência ascendente</option><option value="calm">Suave · um tom</option><option value="bell">Campainha · três tons</option><option value="down">Descendente · dois tons</option><option value="pulse">Pulso · grave</option></select>
+          <small>Escolha um estilo e use “Testar som” para ouvir antes de ativar.</small>
+        </div>
+        <small class="settings-footnote">A notificação pode mostrar o nome e o preço do item na tela do sistema. As permissões são solicitadas somente ao ativar cada recurso.</small>
+      </section>
+      <section class="settings-card">
+        <div class="section-title">Aparência</div>
+        <div class="accent-setting">
+          <div class="accent-copy"><strong>Cor de destaque</strong><small>Colora “Local”, controles ativos e um glow sutil nos cantos. O tema escuro permanece neutro.</small></div>
+          <label class="color-wheel-control" title="Escolher cor de destaque">
+            <span class="color-wheel-preview" aria-hidden="true"></span>
+            <input id="accentColor" type="color" aria-label="Escolher cor de destaque">
+          </label>
+        </div>
+        <div class="accent-actions"><output id="accentColorValue">#C6C6C6</output><button id="resetAccentColor" class="secondary" type="button">Restaurar padrão</button></div>
+      </section>
       <section class="settings-card settings-note">
         <strong>Sobre as verificações automáticas</strong>
         <p>O Radar abre temporariamente cada página em segundo plano para ler o preço e a fecha ao terminar. A fila inclui todos os itens desatualizados ao iniciar e segue no intervalo escolhido. Ela pausa quando o navegador é fechado e é retomada no próximo início. Só usa permissões de sites já concedidas; não pede novos acessos em segundo plano.</p>
+      </section>
+      <section class="settings-card settings-note">
+        <strong>Fila e uso de recursos</strong>
+        <p>As atualizações são sequenciais: uma página por vez. O intervalo escolhido controla o tempo entre páginas. A fila pode ser pausada, retomada ou cancelada. O gráfico é criado somente quando o histórico é expandido.</p>
+        <div id="storageUsage" class="storage-usage">Calculando armazenamento local…</div>
       </section>
     </section>
   </main>
