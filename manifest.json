@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Radar Local",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "minimum_chrome_version": "120",
   "description": "Monitoramento local de preços com pastas personalizadas e histórico.",
   "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
-  "optional_permissions": ["notifications", "offscreen", "contextMenus", "windows"],
+  "optional_permissions": ["notifications", "offscreen", "contextMenus"],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'" },
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "icons": {
     "16": "icons/icon-16.png",

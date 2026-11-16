@@ -1,0 +1,38 @@
+NOME
+Radar Local
+
+RESUMO
+Acompanhe preços, compare lojas e organize seus produtos em pastas. Histórico e alertas com dados salvos no seu navegador.
+
+DESCRIÇÃO
+Seus produtos, suas pastas, seu histórico de preços.
+
+O Radar Local ajuda a acompanhar produtos, cursos, certificações e jogos em páginas escolhidas por você. Salve a página aberta ou crie um produto e adicione os links das lojas que deseja comparar.
+
+• Um produto, várias lojas: agrupe URLs e veja a menor oferta recente entre valores comparáveis da mesma moeda.
+• Pastas do seu jeito: escolha nomes e cores para organizar suas listas.
+• Histórico local: consulte os valores registrados e um gráfico das leituras recentes.
+• Preço-alvo e alertas opcionais: configure notificações, oito estilos de som, volume e horário de silêncio.
+• Atualização em sequência: verifique uma loja, todas as lojas de um produto ou toda a lista. A fila continua ao fechar o popup, enquanto o navegador estiver aberto.
+• Automação opcional: ao iniciar o navegador, atualize itens desatualizados, uma página por vez, com intervalo configurável.
+• Controle da leitura: revise valores duvidosos, corrija manualmente ou configure um seletor CSS para a página ou o domínio.
+• Backup JSON e CSV: exporte seus dados e histórico quando quiser.
+• Popup, painel e janela flutuante: escolha o espaço de trabalho que preferir.
+
+Sem cadastro ou servidor do Radar. Produtos, URLs, preferências e histórico ficam no perfil local do navegador. Não há telemetria ou integração com IA. As verificações acessam as lojas escolhidas, que recebem essas visitas normalmente. O acesso aos sites é solicitado conforme a necessidade; notificações, som e menu de contexto são opcionais.
+
+O Radar mantém o último preço aceito quando a verificação falha. Leituras ambíguas ficam para revisão. O histórico começa com suas próprias leituras: ele não consulta uma base externa de preços anteriores.
+
+A identificação depende da estrutura do site. Algumas páginas podem exigir correção ou seletor manual, e CAPTCHA, login, variantes e descontos condicionais podem afetar a leitura. Confira a oferta no site antes de comprar. Não há garantia de compatibilidade com todas as lojas ou de obtenção do menor preço do mercado.
+
+As atualizações exigem o navegador aberto. O armazenamento local não é sincronizado entre dispositivos; exporte um backup antes de remover a extensão ou limpar seus dados.
+
+Código aberto: https://github.com/joaocarnevalli/radar-local
+Privacidade: https://github.com/joaocarnevalli/radar-local/blob/main/PRIVACY.md
+Suporte: https://github.com/joaocarnevalli/radar-local/issues
+
+CATEGORIA SUGERIDA
+Compras / Shopping (se disponível no formulário atual)
+
+IDIOMA
+Português (Brasil)

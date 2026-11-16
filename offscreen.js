@@ -1,4 +1,5 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id || sender.tab) return;
   if (message?.target === "radar-offscreen" && message.type === "play-price-alert-sound") {
     playShortBeep(message.volume, message.style)
       .then(() => sendResponse({ ok: true }))
@@ -9,6 +10,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function playShortBeep(volumePercent = 35, style = "radar") {
   const audio = new AudioContext();
+  try {
   await audio.resume();
   const start = audio.currentTime;
   const peak = Math.max(0, Math.min(100, Number(volumePercent) || 0)) / 100 * 0.09;
@@ -23,7 +25,8 @@ async function playShortBeep(volumePercent = 35, style = "radar") {
     down: [{ frequency: 880, at: 0, duration: 0.16, type: "sine" }, { frequency: 660, at: 0.16, duration: 0.22, type: "sine" }],
     pulse: [{ frequency: 440, at: 0, duration: 0.11, type: "triangle" }, { frequency: 440, at: 0.19, duration: 0.11, type: "triangle" }]
   };
-  const notes = presets[style] || presets.radar;
+  const notes = Object.hasOwn(presets, style) ? presets[style] : presets.radar;
+  await new Promise(resolve => {
   let remaining = notes.length;
   for (const note of notes) {
     const oscillator = audio.createOscillator();
@@ -41,6 +44,8 @@ async function playShortBeep(volumePercent = 35, style = "radar") {
     gainNode.connect(audio.destination);
     oscillator.start(noteStart);
     oscillator.stop(noteStart + note.duration);
-    oscillator.addEventListener("ended", () => { remaining -= 1; if (remaining === 0) audio.close(); }, { once: true });
+    oscillator.addEventListener("ended", () => { oscillator.disconnect(); gainNode.disconnect(); remaining -= 1; if (remaining === 0) resolve(); }, { once: true });
   }
+  });
+  } finally { if (audio.state !== "closed") await audio.close(); }
 }

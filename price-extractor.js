@@ -5,24 +5,10 @@ function extractPageInfo(selector) {
     if (value == null) return null;
     const raw = String(value).trim();
     if (raw.includes("%")) return null;
-    const currency = currencyHint || (raw.includes("R$") ? "BRL" : /\bBRL\b/i.test(raw) ? "BRL" : /€/.test(raw) ? "EUR" : /£/.test(raw) ? "GBP" : /\bUSD\b/i.test(raw) ? "USD" : "");
-    let number = raw.replace(/[^\d,.-]/g, "");
-    if (!number) return null;
-    if (number.includes(",") && number.includes(".")) {
-      number = number.lastIndexOf(",") > number.lastIndexOf(".") ? number.replace(/\./g, "").replace(",", ".") : number.replace(/,/g, "");
-    } else if (number.includes(",")) {
-      const decimals = number.length - number.lastIndexOf(",") - 1;
-      number = decimals === 3 ? number.replace(/,/g, "") : number.replace(",", ".");
-    } else if (number.includes(".")) {
-      const groups = number.split(".");
-      if (groups.length > 2) {
-        const decimalDigits = groups[groups.length - 1].length;
-        number = decimalDigits === 2 ? `${groups.slice(0, -1).join("")}.${groups.at(-1)}` : groups.join("");
-      } else if (groups[1]?.length === 3) number = groups.join("");
-    }
-    const amount = Number(number);
-    const roundedAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
-    return Number.isFinite(roundedAmount) && roundedAmount > 0 && roundedAmount < 100000000 ? { amount: roundedAmount, currency } : null;
+    if (/\d\s*[x×]|parcela|frete|shipping/i.test(raw)) return null;
+    const matches = raw.match(/(?:R\$|US\$|USD|BRL|€|£|\$)\s*[\d.,]+/gi) || [];
+    if (matches.length > 1) return null;
+    return RadarMoney.parse(matches[0] || value, currencyHint);
   };
 
   const headingNode = document.querySelector("h1");
@@ -41,9 +27,12 @@ function extractPageInfo(selector) {
 
   if (selector) {
     try {
-      const node = document.querySelector(selector);
+      const nodes = document.querySelectorAll(selector);
+      if (nodes.length !== 1) return { title, price: null, regularPrice: null, faviconUrl, error: "O seletor precisa apontar para um único elemento de preço." };
+      const node = nodes[0];
       if (node) add(node.getAttribute("content") || node.getAttribute("data-price") || node.innerText || node.textContent, node.getAttribute("currency") || "", "CSS selector", "high");
-    } catch {}
+      if (!candidates.length) return { title, price: null, regularPrice: null, faviconUrl, error: "O seletor salvo não encontrou um preço único. Revise o seletor desta oferta." };
+    } catch { return { title, price: null, regularPrice: null, faviconUrl, error: "O seletor CSS salvo é inválido." }; }
   }
 
   const products = [];
@@ -119,12 +108,15 @@ function extractPageInfo(selector) {
   const priceNodes = document.querySelectorAll('[class*="price"], [id*="price"], [class*="money"], [class*="pix"], [data-testid*="price"], ins, [itemprop="price"], [data-price]');
   priceNodes.forEach(node => {
     if (mercadoLivrePriceNodes.has(node) || !node.getClientRects().length || node.closest("s, del")) return;
+    if (productScope && !productScope.contains(node)) return;
+    if (node.closest('header, footer, nav, [class*="recommend"], [class*="related"], [class*="carousel"], [class*="cross-sell"], [class*="product-card"]')) return;
     const style = getComputedStyle(node);
     if (style.display === "none" || style.visibility === "hidden" || style.textDecorationLine.includes("line-through")) return;
     const raw = node.getAttribute("content") || node.getAttribute("data-price") || node.innerText || node.textContent || "";
     if (String(raw).includes("%")) return;
     const money = String(raw).match(/(?:R\$|US\$|USD|BRL|€|£)\s*[\d.,]+/gi) || [];
     if (money.length > 1) return;
+    if (!money.length && !node.matches('[itemprop="price"], [data-price]')) return;
     const parsed = parse(raw, node.getAttribute("currency") || "");
     if (!parsed) return;
     const marker = `${node.id || ""} ${typeof node.className === "string" ? node.className : ""} ${node.getAttribute("aria-label") || ""}`.toLowerCase();
@@ -141,6 +133,7 @@ function extractPageInfo(selector) {
     if (/install|parcel|payment|shipping|freight|compare|original|old-price|was-price/.test(marker)) return;
     if (isRegular) { regularLabelPriceCandidates.push(parsed); return; }
     if (isInstallment && !isPix) return;
+    if (/cupom|primeira compra|clube|assinante|m[eê]mbro/i.test(context)) return;
     let score = productScope?.contains(node) ? 70 : 0;
     if (/sale|current|final|special|promotional|promo|discount/.test(marker) || node.matches("ins")) score += 100;
     else if (/price|money/.test(marker)) score += 25;
@@ -174,46 +167,62 @@ function extractPageInfo(selector) {
     const node = document.querySelector(priceSelector);
     if (node) add(node.content || node.getAttribute("content") || node.textContent, document.querySelector(currencySelector)?.content || "", "metadata", "high");
   });
-  document.querySelectorAll('[itemprop="price"], [data-price]').forEach(node => {
+  (productScope || document.querySelector("main") || document).querySelectorAll('[itemprop="price"], [data-price]').forEach(node => {
     if (candidates.length > 30) return;
+    if (node.closest('s, del, [class*="recommend"], [class*="related"], [class*="product-card"]')) return;
     const style = getComputedStyle(node);
     if (style.display === "none" || style.visibility === "hidden") return;
     add(node.getAttribute("content") || node.getAttribute("data-price") || node.textContent, node.closest('[itemtype*="Offer"]')?.querySelector('[itemprop="priceCurrency"]')?.content || "", "page markup", "medium");
   });
 
-  const bestVisiblePrice = visiblePriceCandidates.find(candidate => candidate.isPix && candidate.score >= 160)
-    || visiblePriceCandidates.find(candidate => candidate.score >= 60);
+  const bestVisiblePrice = visiblePriceCandidates.find(candidate => candidate.score >= 60);
   const chosen = candidates.find(candidate => candidate.source === "CSS selector")
     || (bestVisiblePrice && { amount: bestVisiblePrice.amount, currency: bestVisiblePrice.currency, source: bestVisiblePrice.source, confidence: bestVisiblePrice.confidence })
     || candidates.find(candidate => candidate.source === "JSON-LD")
     || candidates.find(candidate => candidate.source === "metadata")
     || candidates.find(candidate => candidate.source === "page markup")
     || (() => {
-      const text = document.body?.innerText?.slice(0, 180000) || "";
+      const text = (productScope || document.querySelector("main"))?.innerText?.slice(0, 50000) || "";
       const patterns = [/R\$\s?[\d.]+,\d{2}/g, /(?:US\$|USD\s?)\s?[\d,]+(?:\.\d{2})?/g, /€\s?[\d.,]+/g, /£\s?[\d.,]+/g];
-      for (const pattern of patterns) { const match = text.match(pattern)?.[0]; const price = parse(match); if (price) return { ...price, source: "texto visível", confidence: "low" }; }
-      return null;
+      const unique = new Map();
+      for (const pattern of patterns) for (const match of text.match(pattern) || []) { const value = parse(match); if (value) unique.set(`${value.currency}:${value.amount}`, value); }
+      return unique.size === 1 ? { ...unique.values().next().value, source: "texto visível", confidence: "low", requiresReview: true, reviewReason: "Valor encontrado em texto, sem identificação segura do preço do produto." } : null;
     })();
   const regularPrice = chosen ? regularPriceCandidates.filter(value => value.amount > chosen.amount && (!value.currency || !chosen.currency || value.currency === chosen.currency)).sort((a, b) => a.amount - b.amount)[0] || null : null;
   const corroboratingSources = chosen ? [...new Set([...candidates, ...visiblePriceCandidates]
     .filter(candidate => candidate.amount === chosen.amount && (!candidate.currency || !chosen.currency || candidate.currency === chosen.currency))
     .map(candidate => candidate.source))] : [];
-  const price = chosen ? { ...chosen, corroboratingSources, confidence: corroboratingSources.length > 1 ? "corroborated" : chosen.confidence || "unknown" } : null;
+  const price = chosen ? { ...chosen, corroboratingSources, confidence: corroboratingSources.length > 1 && !chosen.requiresReview ? "corroborated" : chosen.confidence || "unknown" } : null;
+  if (price && bestVisiblePrice && price.source !== "CSS selector" && visiblePriceCandidates.some(candidate => candidate.score === bestVisiblePrice.score && (candidate.amount !== bestVisiblePrice.amount || candidate.currency !== bestVisiblePrice.currency))) {
+    price.requiresReview = true;
+    price.reviewReason = "A página mostra mais de um preço com a mesma prioridade. Confira a variante e a condição de pagamento.";
+  }
+  if (price && !["CSS selector", "preço visível", "preço Pix visível"].includes(price.source)) {
+    price.requiresReview = true;
+    price.reviewReason ||= "Preço obtido de dados estruturados ou texto; confirme a oferta, a variante e a condição de pagamento.";
+  }
   return { title, price, regularPrice, faviconUrl };
+}
+
+function priceReviewReason(previous, candidate, settings = {}) {
+  if (candidate?.requiresReview || ["low", "medium", "unknown"].includes(candidate?.confidence)) return candidate.reviewReason || "A leitura não tem confiança suficiente para substituir o preço salvo.";
+  if (previous?.currency && previous.currency !== candidate?.currency) return "A moeda mudou ou não foi identificada. Confira o valor antes de aceitar.";
+  const anomaly = settings.priceAnomalyGuardEnabled !== false ? isSuspiciousPriceChange(previous, candidate, Number(settings.priceAnomalyThresholdPercent) || 50) : null;
+  return anomaly ? `Variação de ${anomaly.changePercent.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% em relação ao preço salvo.` : "";
 }
 
 function evaluatePriceAlert(item, current, settings = {}) {
   const previous = Number(item?.price?.amount);
   const amount = Number(current?.amount);
   if (!Number.isFinite(amount) || amount <= 0) return null;
-  const currencyMatches = !item?.price?.currency || !current?.currency || item.price.currency === current.currency;
-  const targetCrossed = item?.target != null && amount <= Number(item.target) && (!Number.isFinite(previous) || previous > Number(item.target));
+  const currencyMatches = !item?.price || (item.price.currency || "") === (current?.currency || "");
+  const targetCrossed = currencyMatches && item?.target != null && amount <= Number(item.target) && (!Number.isFinite(previous) || previous > Number(item.target));
   const dropPercent = Number.isFinite(previous) && previous > 0 && currencyMatches && amount < previous ? (previous - amount) / previous * 100 : 0;
   const minimumDrop = Math.min(99, Math.max(0, Number(settings.priceAlertMinDropPercent) || 0));
   const dropQualified = dropPercent > 0 && dropPercent >= minimumDrop;
   const oldPrices = (Array.isArray(item?.history) ? item.history : []).filter(point =>
     Number.isFinite(Number(point.amount)) && Number(point.amount) > 0 &&
-    (!point.currency || !current.currency || point.currency === current.currency));
+    (point.currency || "") === (current.currency || ""));
   const previousLow = oldPrices.length ? Math.min(...oldPrices.map(point => Number(point.amount))) : currencyMatches ? previous : NaN;
   const newLow = Number.isFinite(previousLow) && previousLow > 0 && amount < previousLow;
   if (targetCrossed) return { kind: "target", dropPercent, newLow };

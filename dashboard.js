@@ -1,4 +1,6 @@
 const frame = document.getElementById("radarApp");
+const sourceTab = Number(new URLSearchParams(location.search).get("sourceTab"));
+if (sourceTab > 0) frame.src = "popup.html?dashboard=1&embedded=1&sourceTab=" + sourceTab;
 const navButtons = [...document.querySelectorAll(".side-nav-link")];
 const activeViewTitle = document.getElementById("activeViewTitle");
 let selectedView = "itemsView";
@@ -13,7 +15,7 @@ function selectView(button, send = true) {
   });
   activeViewTitle.textContent = button.dataset.title;
   if (send && frame.contentWindow) {
-    frame.contentWindow.postMessage({ type: "radar:navigate", view: selectedView }, "*");
+    frame.contentWindow.postMessage({ type: "radar:navigate", view: selectedView }, location.origin);
   }
 }
 

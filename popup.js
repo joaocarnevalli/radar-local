@@ -21,53 +21,88 @@ let data = { folders: [], products: [], items: [], siteProfiles: [] };
 const DEFAULT_ACCENT_COLOR = "#c6c6c6";
 let settings = { startupRefreshEnabled: false, startupRefreshPaceMinutes: 5, startupRefreshStaleMinutes: 1440, startupRefreshStaleUnit: "hours", defaultFolderId: NO_FOLDER, priceAlertsEnabled: false, priceAlertSoundEnabled: false, priceAlertVolume: 35, priceAlertCooldownMinutes: 15, priceAlertSoundStyle: "radar", priceAlertMinDropPercent: 0, priceAlertNewLowEnabled: false, quietHoursEnabled: false, quietHoursStart: "22:00", quietHoursEnd: "08:00", priceAnomalyGuardEnabled: true, priceAnomalyThresholdPercent: 50, priceSourceEnabled: true, priceHistoryChartEnabled: true, contextMenuEnabled: false, accentColor: DEFAULT_ACCENT_COLOR };
 let currentPage = null;
+let dataBaseline;
+let settingsBaseline;
+let pendingWrites = 0;
+let pendingSettingsWrites = 0;
+let refreshViewTimer;
 let toastTimer;
 
-document.addEventListener("DOMContentLoaded", init);
+document.addEventListener("DOMContentLoaded", () => { void init().catch(showOperationError); });
+window.addEventListener("unhandledrejection", event => { event.preventDefault(); showOperationError(event.reason); });
+function showOperationError(error) {
+  showToast(error?.message || "Não foi possível salvar. Os dados anteriores foram mantidos.", true);
+  if (dataBaseline && !pendingWrites) void synchronizeData().catch(() => {});
+}
+async function synchronizeData(render = true) {
+  if (pendingWrites) return;
+  const latest = await RadarData.read();
+  if (pendingWrites) return;
+  RadarData.reconcile(data, latest);
+  dataBaseline = RadarData.clone(latest);
+  if (render) renderAll();
+}
+function scheduleDataSync() {
+  clearTimeout(refreshViewTimer);
+  refreshViewTimer = setTimeout(() => {
+    if (pendingWrites) return;
+    const editing = document.activeElement?.matches("input:not([type=checkbox]):not([type=range]):not([type=color]), textarea");
+    if (editing) { scheduleDataSync(); return; }
+    void synchronizeData().catch(showOperationError);
+  }, 250);
+}
 
 async function init() {
   document.documentElement.classList.toggle("floating-window", floatingWindowMode);
-  data = await loadData();
+  try { data = await loadData(); }
+  catch (error) { await showDataRecovery(error); return; }
   settings = await loadSettings();
+  dataBaseline = RadarData.clone(data);
+  settingsBaseline = RadarData.clone(settings);
   bindEvents();
   await chrome.action.setBadgeText({ text: "" });
   await chrome.action.setTitle({ title: "Radar Local" });
   renderAll();
-  renderSettings();
+  await syncQueueStatus();
   await inspectCurrentTab();
 }
 
-async function loadData() {
-  const saved = (await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY];
-  if (!saved || !Array.isArray(saved.folders) || !Array.isArray(saved.items)) return { folders: [], products: [], items: [], siteProfiles: [], favicons: {} };
-  const normalized = normalizeProductData(saved);
-  if (!Array.isArray(saved.products)) await chrome.storage.local.set({ [STORAGE_KEY]: normalized });
-  return normalized;
+async function showDataRecovery(error) {
+  const original = (await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY];
+  const main = document.querySelector("main");
+  const section = document.createElement("section"); section.className = "settings-card";
+  const heading = document.createElement("h2"); heading.textContent = "Os dados precisam de revisão";
+  const message = document.createElement("p"); message.textContent = `${error.message} Os registros originais continuam salvos. Exporte uma cópia antes de recuperar.`;
+  const backup = document.createElement("button"); backup.textContent = "Exportar dados originais";
+  backup.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify({ app: "Radar Local", recovery: true, rawData: original }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob); const link = document.createElement("a");
+    link.href = url; link.download = "radar-local-recuperacao.json"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  const restore = document.createElement("button"); restore.textContent = "Restaurar backup válido";
+  const file = document.createElement("input"); file.type = "file"; file.accept = ".json,application/json"; file.hidden = true;
+  restore.addEventListener("click", () => file.click());
+  file.addEventListener("change", async () => {
+    try {
+      const selected = file.files?.[0]; if (!selected) return;
+      if (selected.size > 9 * 1024 * 1024) throw new Error("O backup excede 9 MB.");
+      const parsed = JSON.parse(await selected.text());
+      if (parsed.schemaVersion != null && (!Number.isInteger(parsed.schemaVersion) || parsed.schemaVersion > 3 || parsed.schemaVersion < 1)) throw new Error("Versão de backup não suportada.");
+      const restored = RadarData.normalize(parsed);
+      if (!confirm("Substituir os dados pelo backup validado? Guarde a cópia dos dados originais antes de continuar.")) return;
+      await RadarData.replace(original, restored, null, true);
+      location.reload();
+    } catch (failure) { message.textContent = failure.message; }
+    finally { file.value = ""; }
+  });
+  section.append(heading, message, backup, restore, file); main.replaceChildren(section);
+  document.querySelector(".tabs").hidden = true;
+  for (const button of document.querySelectorAll(".topbar button")) button.disabled = true;
 }
 
-function normalizeProductData(saved) {
-  const products = Array.isArray(saved.products) ? saved.products.map(product => ({ ...product })) : [];
-  const items = saved.items.map(item => ({ ...item }));
-  const seen = new Set(products.map(product => product.id));
-  for (const item of items) {
-    const productId = item.productId || item.productGroupId || item.id || crypto.randomUUID();
-    item.productId = productId;
-    item.productGroupId = productId;
-    let product = products.find(row => row.id === productId);
-    if (!product) {
-      let id = productId;
-      if (seen.has(id)) id = crypto.randomUUID();
-      seen.add(id);
-      item.productId = item.productGroupId = id;
-      product = { id, name: item.name || "Produto sem nome", folderId: item.folderId || NO_FOLDER, target: item.target ?? null, createdAt: item.createdAt || new Date().toISOString() };
-      products.push(product);
-    }
-    item.name = product.name;
-    item.folderId = product.folderId || item.folderId || NO_FOLDER;
-    item.target = product.target ?? item.target ?? null;
-  }
-  return { ...saved, folders: [...saved.folders], products, items, siteProfiles: Array.isArray(saved.siteProfiles) ? [...saved.siteProfiles] : [], favicons: normalizeFavicons(saved.favicons) };
-}
+async function loadData() { return RadarData.read(); }
+function normalizeProductData(saved) { return RadarData.normalize(saved); }
+
 
 function normalizeFavicons(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -82,10 +117,12 @@ function normalizeFavicons(value) {
 }
 
 async function persist() {
-  if (!Array.isArray(data.siteProfiles)) data.siteProfiles = [];
-  if (!Array.isArray(data.products)) data.products = [];
-  if (!data.favicons || typeof data.favicons !== "object") data.favicons = {};
-  await chrome.storage.local.set({ [STORAGE_KEY]: data });
+  const snapshot = RadarData.normalize(data);
+  const patch = RadarData.changes(dataBaseline, snapshot);
+  dataBaseline = RadarData.clone(snapshot);
+  pendingWrites += 1;
+  try { await RadarData.commit(patch); }
+  finally { pendingWrites -= 1; if (!pendingWrites) await synchronizeData(false); }
 }
 
 function getSiteHost(url) { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } }
@@ -121,9 +158,15 @@ async function cacheFavicons(offers) {
       try {
         const origin = new URL(item.url).origin;
         if (!await chrome.permissions.contains({ origins: [`${origin}/*`] })) return;
-        const response = await fetch(iconUrl, { credentials: "omit", cache: "force-cache", redirect: "follow" });
+        const response = await fetch(iconUrl, { credentials: "omit", cache: "force-cache", redirect: "error", signal: AbortSignal.timeout(5000) });
         if (!response.ok || new URL(response.url).origin !== origin) return;
-        const blob = await response.blob();
+        const reader = response.body?.getReader();
+        if (!reader) return;
+        const chunks = []; let received = 0;
+        try {
+          while (true) { const chunk = await reader.read(); if (chunk.done) break; received += chunk.value.byteLength; if (received > 24 * 1024) { await reader.cancel(); return; } chunks.push(chunk.value); }
+        } finally { reader.releaseLock(); }
+        const blob = new Blob(chunks, { type: (response.headers.get("Content-Type") || "").split(";")[0] });
         const safeTypes = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/x-icon", "image/vnd.microsoft.icon"];
         if (!safeTypes.includes(blob.type.toLowerCase()) || !blob.size || blob.size > 24 * 1024 || faviconStorageBytes() + blob.size > 512 * 1024) return;
         const dataUrl = await blobToDataUrl(blob);
@@ -149,7 +192,15 @@ function isItemStale(item) {
   const checkedAt = Date.parse(item.price?.checkedAt || "");
   return !Number.isFinite(checkedAt) || Date.now() - checkedAt > settings.startupRefreshStaleMinutes * 60_000;
 }
-function isItemFresh(item) { return Boolean(item.price && !item.lastCheckError && !isItemStale(item)); }
+function isItemFresh(item) { return Boolean(item.price && !item.pendingPriceCandidate && !item.lastCheckError && !isItemStale(item)); }
+function itemRefreshState(item) {
+  const state = refreshStates.get(item.id);
+  if (state?.state === "loading") return state;
+  if (item.pendingPriceCandidate) return { state: "review" };
+  if (item.lastCheckError) return { state: "error" };
+  if (state?.state === "success" && !isItemStale(item) && Date.now() - Date.parse(state.checkedAt || "") < 60000) return state;
+  return null;
+}
 function getQuietHoursActive() {
   if (!settings.quietHoursEnabled) return false;
   const toMinutes = value => { const parts = value.split(":").map(Number); return parts[0] * 60 + parts[1]; };
@@ -162,19 +213,18 @@ function itemAlertsMuted(item) {
   return item.alertsMuted === true || product?.alertsMuted === true;
 }
 async function openFloatingWindow() {
-  const granted = await chrome.permissions.request({ permissions: ["windows"] }).catch(() => false);
-  if (!granted) return showToast("Permissão de janelas não concedida; a janela flutuante não foi aberta.", true);
-  const url = chrome.runtime.getURL("popup.html?floating=1");
+  const sourceTab = currentPage?.tabId;
+  const url = chrome.runtime.getURL("popup.html?floating=1" + (sourceTab ? "&sourceTab=" + sourceTab : ""));
   try {
     const windows = await chrome.windows.getAll({ populate: true, windowTypes: ["popup"] });
-    const existing = windows.find(win => win.tabs?.some(tab => tab.url?.startsWith(url)));
+    const existing = windows.find(win => win.tabs?.some(tab => tab.url?.startsWith(chrome.runtime.getURL("popup.html?floating=1"))));
     if (existing) { await chrome.windows.update(existing.id, { focused: true }); return; }
     await chrome.windows.create({ url, type: "popup", width: 420, height: 760, focused: true });
   } catch (error) { showToast(error.message || "Não consegui abrir a janela flutuante.", true); }
 }
 
 function openDashboard() {
-  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html" + (currentPage?.tabId ? "?sourceTab=" + currentPage.tabId : "")) });
 }
 
 async function loadSettings() {
@@ -194,7 +244,7 @@ function normalizeSettings(saved = {}) {
     startupRefreshPaceMinutes: Number.isFinite(pace) ? Math.min(60, Math.max(0.5, Math.round(pace * 2) / 2)) : 5,
     startupRefreshStaleMinutes: Math.min(525600, Math.max(1, Math.round(staleMinutes))),
     startupRefreshStaleUnit: staleUnit,
-    defaultFolderId: saved.defaultFolderId || NO_FOLDER,
+    defaultFolderId: typeof saved.defaultFolderId === "string" ? saved.defaultFolderId : NO_FOLDER,
     priceAlertsEnabled: saved.priceAlertsEnabled === true,
     priceAlertSoundEnabled: saved.priceAlertSoundEnabled === true,
     priceAlertVolume: Math.min(100, Math.max(0, Number.isFinite(Number(saved.priceAlertVolume)) ? Number(saved.priceAlertVolume) : 35)),
@@ -215,17 +265,27 @@ function normalizeSettings(saved = {}) {
 }
 
 async function persistSettings() {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
-  renderSettings();
+  const snapshot = normalizeSettings(settings);
+  const before = settingsBaseline;
+  settingsBaseline = RadarData.clone(snapshot);
+  pendingSettingsWrites += 1;
+  try { await RadarData.saveSettings(before, snapshot); }
+  finally {
+    pendingSettingsWrites -= 1;
+    if (!pendingSettingsWrites) { settings = await loadSettings(); settingsBaseline = RadarData.clone(settings); await renderSettings(); }
+  }
 }
 
 function bindEvents() {
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && (changes.radarLocalAutoQueue || changes[AUTO_STATUS_KEY])) syncQueueStatus();
+    if (area !== "local") return;
+    if (changes[STORAGE_KEY]) scheduleDataSync();
+    if (changes[SETTINGS_KEY] && !pendingSettingsWrites) { settings = normalizeSettings(changes[SETTINGS_KEY].newValue || {}); settingsBaseline = RadarData.clone(settings); void renderSettings().catch(showOperationError); }
+    if (changes.radarLocalAutoQueue || changes[AUTO_STATUS_KEY]) void syncQueueStatus().catch(showOperationError);
   });
   if (document.documentElement.classList.contains("dashboard-embed")) {
     window.addEventListener("message", event => {
-      if (event.source !== window.parent || event.data?.type !== "radar:navigate") return;
+      if (event.source !== window.parent || event.origin !== location.origin || event.data?.type !== "radar:navigate") return;
       const view = ["itemsView", "foldersView", "settingsView"].includes(event.data.view) ? event.data.view : "itemsView";
       document.querySelector(`.tab[data-view="${view}"]`)?.click();
     });
@@ -260,8 +320,7 @@ function bindEvents() {
     settings.startupRefreshEnabled = event.target.checked;
     await persistSettings();
     if (!settings.startupRefreshEnabled) {
-      await chrome.alarms.clear("radar-local-startup-refresh");
-      await chrome.storage.local.remove("radarLocalAutoQueue");
+      await chrome.runtime.sendMessage({ type: "radar:queue-control", action: "disable-auto" });
     }
     showToast(settings.startupRefreshEnabled ? "A fila automática começa no próximo início do navegador." : "Fila cancelada. Se houver uma leitura em curso, ela termina antes de parar.");
   });
@@ -537,26 +596,37 @@ async function testAlertSound() {
 
 async function inspectCurrentTab() {
   let tab;
-  if (floatingWindowMode) {
-    const activeWindow = await chrome.windows.getLastFocused({ populate: true, windowTypes: ["normal"] }).catch(() => null);
-    tab = activeWindow?.tabs?.find(candidate => candidate.active);
-  } else [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !/^https?:/.test(tab.url || "")) {
-    document.getElementById("pageSummary").textContent = "Esta página não pode ser monitorada pelo Chrome.";
-    document.getElementById("captureButton").disabled = true;
+  const params = new URLSearchParams(location.search);
+  const sourceTab = Number(params.get("sourceTab"));
+  const detached = floatingWindowMode || params.get("dashboard") === "1";
+  if (detached && sourceTab > 0) tab = await chrome.tabs.get(sourceTab).catch(() => null);
+  if (!tab && detached) {
+    const tabs = await chrome.tabs.query({ windowType: "normal" });
+    tab = tabs.filter(candidate => RadarData.url(candidate.url)).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  } else if (!tab) [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const button = document.getElementById("captureButton");
+  if (!tab?.id || !RadarData.url(tab.url)) {
+    currentPage = null; button.disabled = true;
+    document.getElementById("pageSummary").textContent = "Abra uma página de produto no navegador para monitorar.";
     return;
   }
+  button.disabled = false;
+  currentPage = { title: tab.title || "", url: tab.url, tabId: tab.id, price: null };
   try {
-    const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractPageInfo, args: [getSiteProfile(tab.url)?.selector || ""] });
-    currentPage = { ...result.result, url: tab.url };
-    document.getElementById("pageSummary").textContent = `${currentPage.title || new URL(tab.url).hostname} · ${currentPage.price ? formatPrice(currentPage.price.amount, currentPage.price.currency) : "preço não detectado"}`;
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["money.js", "price-extractor.js"] });
+    const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: selector => extractPageInfo(selector), args: [getSiteProfile(tab.url)?.selector || ""] });
+    currentPage = { ...result.result, url: tab.url, tabId: tab.id };
+    document.getElementById("pageSummary").textContent = (currentPage.title || new URL(tab.url).hostname) + " · " + (currentPage.price ? formatPrice(currentPage.price.amount, currentPage.price.currency) : "preço não detectado");
   } catch {
-    currentPage = { title: tab.title || "", url: tab.url, price: null };
-    document.getElementById("pageSummary").textContent = "Não consegui ler esta página. Você ainda pode cadastrar o link manualmente.";
+    document.getElementById("pageSummary").textContent = (tab.title || new URL(tab.url).hostname) + " · conceda acesso para ler o preço ou informe-o manualmente.";
   }
 }
 
-function onCaptureClick() {
+async function onCaptureClick() {
+  if (currentPage?.url && !currentPage.price) {
+    const allowed = await chrome.permissions.request({ origins: [new URL(currentPage.url).origin + "/*"] });
+    if (allowed) await inspectCurrentTab();
+  }
   if (!currentPage) return showToast("Abra uma página de produto ou curso no Chrome.", true);
   document.getElementById("itemName").value = currentPage.title || "";
   document.getElementById("itemPrice").value = currentPage.price ? String(currentPage.price.amount).replace(".", ",") : "";
@@ -565,6 +635,8 @@ function onCaptureClick() {
   const profile = getSiteProfile(currentPage.url);
   document.getElementById("itemSelector").placeholder = profile ? `Perfil de ${profile.host} disponível` : "Ex.: [itemprop='price']";
   fillFolderSelect(document.getElementById("itemFolder"), settings.defaultFolderId, true);
+  document.getElementById("captureReview").classList.toggle("hidden", !currentPage.price?.requiresReview);
+  document.getElementById("captureReviewConfirmed").checked = false;
   document.getElementById("addForm").classList.remove("hidden");
 }
 
@@ -576,27 +648,31 @@ async function saveCurrentPage() {
   if (duplicate) return showToast("Esse link já está monitorado. Use Atualizar no item existente.", true);
   const price = parseUserPrice(document.getElementById("itemPrice").value);
   const target = parseUserPrice(document.getElementById("itemTarget").value);
+  if (document.getElementById("itemPrice").value.trim() && (!price || price.amount <= 0)) return showToast("Informe um preço positivo válido ou deixe o campo vazio.", true);
+  if (document.getElementById("itemTarget").value.trim() && !target) return showToast("Informe um preço-alvo válido ou deixe o campo vazio.", true);
   const detectedPrice = currentPage.price;
-  const sameAsDetected = Boolean(price && detectedPrice && Math.round(price.amount * 100) === Math.round(Number(detectedPrice.amount) * 100));
+  const sameAsDetected = Boolean(price && detectedPrice && (!price.currency || price.currency === detectedPrice.currency) && Math.round(price.amount * 100) === Math.round(Number(detectedPrice.amount) * 100));
+  if (sameAsDetected && detectedPrice.requiresReview && !document.getElementById("captureReviewConfirmed").checked) return showToast("Confira o preço, a variante e o pagamento no site e marque a confirmação antes de salvar.", true);
   const productId = crypto.randomUUID();
+  const checkedAt = new Date().toISOString();
   const folderId = document.getElementById("itemFolder").value;
   const product = { id: productId, name, folderId, target: target?.amount ?? null, createdAt: new Date().toISOString() };
   const entry = {
     id: crypto.randomUUID(), productId, productGroupId: productId, offerLabel: getSiteHost(currentPage.url), name, url: currentPage.url,
     faviconUrl: getSameOriginFaviconUrl(currentPage.url, currentPage.faviconUrl),
     regularPrice: currentPage.regularPrice || null,
-    regularPriceObservedAt: currentPage.regularPrice ? new Date().toISOString() : null,
+    regularPriceObservedAt: currentPage.regularPrice && sameAsDetected ? checkedAt : null,
     folderId,
     target: target?.amount ?? null,
     selector: document.getElementById("itemSelector").value.trim(),
     price: sameAsDetected
-      ? { ...detectedPrice, checkedAt: new Date().toISOString() }
+      ? { ...detectedPrice, requiresReview: false, confidence: detectedPrice.requiresReview ? "confirmed" : detectedPrice.confidence, checkedAt }
       : price
-        ? { ...price, currency: price.currency || detectedPrice?.currency || "", checkedAt: new Date().toISOString(), source: "entrada manual", confidence: "confirmed" }
-        : (detectedPrice ? { ...detectedPrice, checkedAt: new Date().toISOString() } : null),
+        ? { ...price, currency: price.currency || detectedPrice?.currency || "", checkedAt, source: "entrada manual", confidence: "confirmed" }
+        : null,
     history: []
   };
-  if (entry.price) entry.history.push({ amount: entry.price.amount, currency: entry.price.currency || "", checkedAt: entry.price.checkedAt, source: entry.price.source || "page" });
+  if (entry.price) entry.history.push({ ...entry.price });
   data.products.unshift(product);
   data.items.unshift(entry);
   await persist();
@@ -624,7 +700,7 @@ function renderAll() {
   fillFolderSelect(document.getElementById("newProductFolder"), settings.defaultFolderId, true);
   renderItems();
   renderFolders();
-  renderSettings();
+  void renderSettings().catch(showOperationError);
   updateRefreshAllButton();
 }
 
@@ -831,7 +907,7 @@ function renderItems() {
   const getComparablePrice = product => {
     const offers = productOffers(product).filter(item => item.availability !== "out-of-stock" && Number(item.price?.amount) > 0);
     const currency = offers.find(item => item.price?.currency)?.price.currency || "";
-    const comparable = offers.filter(item => !currency || !item.price.currency || item.price.currency === currency);
+    const comparable = offers.filter(item => (item.price.currency || "") === currency);
     return comparable.length ? Math.min(...comparable.map(item => Number(item.price.amount))) : Infinity;
   };
   const latestCheck = product => Math.max(0, ...productOffers(product).map(item => Date.parse(item.price?.checkedAt || "") || 0));
@@ -842,6 +918,7 @@ function renderItems() {
     if (sort === "target") return (a.target == null ? Infinity : Number(a.target)) - (b.target == null ? Infinity : Number(b.target)) || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
     return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
   };
+  groups.forEach(group => group.products.sort(productSort));
   groups.sort((a, b) => {
     if (sort === "folder") return b.products.length - a.products.length || a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
     if (!a.products.length || !b.products.length) return a.products.length ? -1 : b.products.length ? 1 : a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
@@ -897,15 +974,16 @@ function buildProductCard(product, offers, folderColor, archived = false) {
   if (archived && product.archiveReason === "purchased") { const purchased = document.createElement("small"); purchased.className = "purchased-badge"; purchased.textContent = "COMPRADO"; titleWrap.append(purchased); }
   const priced = offers.filter(item => isItemFresh(item) && item.availability !== "out-of-stock" && Number.isFinite(Number(item.price?.amount)) && Number(item.price.amount) > 0);
   const firstCurrency = priced.find(item => item.price?.currency)?.price.currency || "";
-  const comparable = priced.filter(item => !firstCurrency || !item.price.currency || item.price.currency === firstCurrency);
+  const mixedCurrencies = new Set(offers.filter(item => item.price).map(item => item.price.currency || "")).size > 1;
+  const comparable = mixedCurrencies ? [] : priced.filter(item => (item.price.currency || "") === firstCurrency);
   comparable.sort((a, b) => Number(a.price.amount) - Number(b.price.amount));
   const best = comparable[0];
-  const known = offers.filter(item => item.price && Number(item.price.amount) > 0 && item.availability !== "out-of-stock").sort((a, b) => Number(a.price.amount) - Number(b.price.amount))[0];
+  const known = offers.filter(item => item.price && Number(item.price.amount) > 0 && item.availability !== "out-of-stock").sort((a, b) => (Date.parse(b.price.checkedAt) || 0) - (Date.parse(a.price.checkedAt) || 0))[0];
   const summaryOffer = best || known;
   const source = document.createElement("span"); source.className = "product-best-source";
   if (summaryOffer) {
     const sourceName = summaryOffer.offerLabel || getSiteHost(summaryOffer.url);
-    source.append(document.createTextNode(offers.length + (offers.length === 1 ? " loja · " : " lojas · ") + (best ? "menor atual " : "último preço conhecido ")));
+    source.append(document.createTextNode(offers.length + (offers.length === 1 ? " loja · " : " lojas · ") + (mixedCurrencies ? "moedas diferentes · " : best ? "menor atual " : "último preço conhecido ")));
     const sourceLink = document.createElement("a"); sourceLink.href = summaryOffer.url; sourceLink.target = "_blank"; sourceLink.rel = "noopener noreferrer"; sourceLink.className = "best-source-link"; sourceLink.title = `Abrir oferta em ${sourceName}`;
     sourceLink.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); chrome.tabs.create({ url: summaryOffer.url }); });
     appendStoreIcon(sourceLink, summaryOffer);
@@ -915,8 +993,8 @@ function buildProductCard(product, offers, folderColor, archived = false) {
   const priceWrap = document.createElement("span"); priceWrap.className = "product-summary-price-wrap";
   const price = document.createElement("span"); price.className = "product-summary-price"; price.textContent = summaryOffer ? formatPrice(summaryOffer.price.amount, summaryOffer.price.currency) : "—"; priceWrap.append(price);
   if (summaryOffer) {
-    const checkState = refreshStates.get(summaryOffer.id);
-    if (checkState || !best) {
+    const checkState = itemRefreshState(summaryOffer);
+    if (checkState || !isItemFresh(summaryOffer)) {
       const status = document.createElement("small");
       status.className = "freshness-badge " + (checkState?.state === "error" || summaryOffer.lastCheckError ? "failed" : checkState?.state === "review" || !best ? "stale" : "fresh");
       status.textContent = checkState?.state === "loading" ? "atualizando…"
@@ -985,7 +1063,9 @@ function buildProductSettings(product, offers, archived = false) {
   const targetLabel = document.createElement("label"); targetLabel.textContent = "Preço-alvo do produto";
   const target = document.createElement("input"); target.inputMode = "decimal"; target.placeholder = "Opcional"; target.value = product.target ?? "";
   target.addEventListener("change", async () => {
-    product.target = parseUserPrice(target.value)?.amount ?? null;
+    const parsed = parseUserPrice(target.value);
+    if (target.value.trim() && !parsed) { target.value = product.target ?? ""; return showToast("Preço-alvo inválido. O valor anterior foi mantido.", true); }
+    product.target = parsed?.amount ?? null;
     offers.forEach(item => { item.target = product.target; });
     await persist(); renderItems();
   });
@@ -1076,7 +1156,7 @@ function buildOfferAccordion(item, folderColor) {
   link.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); chrome.tabs.create({ url: item.url }); });
   const left = document.createElement("span"); left.className = "offer-summary-copy";
   const storeLine = document.createElement("span"); storeLine.className = "offer-summary-storeline"; appendStoreIcon(storeLine, item); storeLine.append(store, renameStore);
-  const checkState = refreshStates.get(item.id);
+  const checkState = itemRefreshState(item);
   const freshness = document.createElement("small");
   freshness.className = "freshness-badge " + (checkState?.state === "error" || item.lastCheckError ? "failed" : checkState?.state === "review" ? "stale" : checkState?.state === "success" ? "fresh" : isItemStale(item) ? "stale" : item.price ? "fresh" : "unknown");
   freshness.textContent = checkState?.state === "loading" ? "atualizando preço…"
@@ -1086,7 +1166,7 @@ function buildOfferAccordion(item, folderColor) {
           : isItemStale(item) ? (item.price ? "preço desatualizado" : "sem preço verificado") : "preço recente";
   left.append(storeLine, freshness);
   details.addEventListener("toggle", () => { if (details.open) expandedOffers.add(item.id); else expandedOffers.delete(item.id); });
-  if (item.availability !== "unknown") { const stock = document.createElement("small"); stock.className = "stock-badge " + (item.availability === "out-of-stock" ? "out" : "in"); stock.textContent = item.availability === "out-of-stock" ? "esgotado" : "disponível"; priceWrap.append(stock); }
+  if (["in-stock", "out-of-stock"].includes(item.availability)) { const stock = document.createElement("small"); stock.className = "stock-badge " + (item.availability === "out-of-stock" ? "out" : "in"); stock.textContent = item.availability === "out-of-stock" ? "esgotado" : "disponível"; priceWrap.append(stock); }
   summary.append(arrow, left, priceWrap, correctPrice, link); details.append(summary, offerCard); return details;
 }
 
@@ -1159,9 +1239,9 @@ function getDiscountPercent(item) {
   const current = Number(item.price?.amount);
   const regular = Number(item.regularPrice?.amount ?? item.regularPrice);
   const currentCurrency = item.price?.currency || "";
-  const regularCurrency = item.regularPrice?.currency || currentCurrency;
+  const regularCurrency = item.regularPrice?.currency || "";
   if (!Number.isFinite(current) || !Number.isFinite(regular) || current <= 0 || regular <= current) return null;
-  if (currentCurrency && regularCurrency && currentCurrency !== regularCurrency) return null;
+  if (currentCurrency !== regularCurrency) return null;
   return Math.round((1 - current / regular) * 100);
 }
 
@@ -1169,7 +1249,7 @@ function getHistoricalLow(item) {
   const points = Array.isArray(item.history) ? item.history : [];
   const current = item.price;
   if (!current || !Number.isFinite(Number(current.amount)) || Number(current.amount) <= 0 || points.length < 2) return null;
-  const sameCurrency = points.filter(point => Number.isFinite(Number(point.amount)) && Number(point.amount) > 0 && (!current.currency || !point.currency || point.currency === current.currency));
+  const sameCurrency = points.filter(point => Number.isFinite(Number(point.amount)) && Number(point.amount) > 0 && (current.currency || "") === (point.currency || ""));
   if (!sameCurrency.length) return null;
   const minimum = Math.min(...sameCurrency.map(point => Number(point.amount)));
   const currentAmount = Number(current.amount);
@@ -1195,7 +1275,7 @@ function getIncreasePercent(item) {
     else previous = history[history.length - 2];
   }
   if (!previous || !Number.isFinite(Number(previous.amount)) || Number(previous.amount) <= 0) return null;
-  if (current.currency && previous.currency && current.currency !== previous.currency) return null;
+  if ((current.currency || "") !== (previous.currency || "")) return null;
   const difference = (Number(current.amount) / Number(previous.amount) - 1) * 100;
   return difference > 0.05 ? Math.round(difference * 10) / 10 : null;
 }
@@ -1213,9 +1293,11 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
     const parsed = parseUserPrice(value);
     if (!parsed || parsed.amount <= 0) return showToast("Informe um preço válido, como 1.899,90.", true);
     const checkedAt = new Date().toISOString();
-    const currency = item.price?.currency || "BRL";
+    const currency = parsed.currency || item.price?.currency || "";
     item.price = { ...parsed, currency, checkedAt, source: "correção manual", confidence: "confirmed" };
     delete item.pendingPriceCandidate;
+    delete item.lastCheckError; delete item.lastCheckErrorAt;
+    refreshStates.delete(item.id);
     item.history = Array.isArray(item.history) ? item.history : [];
     item.history.push({ amount: parsed.amount, currency, checkedAt, source: "correção manual", confidence: "confirmed" });
     if (item.history.length > 300) item.history = item.history.slice(-300);
@@ -1224,7 +1306,7 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
   const discountPercent = getDiscountPercent(item);
   priceBlock.append(price);
   if (discountPercent !== null) {
-    const badge = document.createElement("span"); badge.className = "discount-badge"; badge.textContent = `${discountPercent}% OFF`;
+    const badge = document.createElement("span"); badge.className = "discount-badge"; badge.textContent = `${discountPercent}% ${item.regularPriceObservedAt === item.price?.checkedAt ? "OFF" : "vs. referência"}`;
     const observedAt = item.regularPriceObservedAt ? ` · detectado em ${formatDate(item.regularPriceObservedAt)}` : "";
     badge.title = item.regularPrice?.amount ? `Comparado ao último preço normal identificado: ${formatPrice(item.regularPrice.amount, item.regularPrice.currency || item.price?.currency)}${observedAt}` : "Desconto calculado sobre o preço normal";
     priceBlock.append(badge);
@@ -1260,7 +1342,7 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
   if (item.pendingPriceCandidate) {
     const candidate = item.pendingPriceCandidate;
     const review = document.createElement("div"); review.className = "price-review";
-    const message = document.createElement("div"); message.textContent = `Variação de ${candidate.changePercent.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% detectada. Candidato: ${formatPrice(candidate.amount, candidate.currency)}. O preço salvo foi mantido.`;
+    const message = document.createElement("div"); message.textContent = `${candidate.reason || candidate.reviewReason || "Confirme esta leitura."} Candidato: ${formatPrice(candidate.amount, candidate.currency)}. O preço salvo foi mantido.`;
     const actions = document.createElement("div"); actions.className = "row-actions";
     const accept = document.createElement("button"); accept.className = "primary"; accept.type = "button"; accept.textContent = "Aceitar preço";
     accept.addEventListener("click", () => acceptPriceCandidate(item));
@@ -1313,13 +1395,13 @@ function buildItemCard(item, folderColor = "#9b9b9b", options = {}) {
     const chart = buildHistoryChart(item);
     if (chart) history.insertBefore(chart, history.children[1] || null);
   });
-  [...(item.history || [])].slice(-8).reverse().forEach((point, displayIndex) => {
-    const historyIndex = item.history.length - 1 - displayIndex;
+  [...(item.history || [])].slice(-8).reverse().forEach(point => {
+    const historyKey = RadarData.pointKey(point);
     const entry = document.createElement("div"); entry.className = "history-entry";
     const date = document.createElement("span"); date.className = "history-date"; date.textContent = formatDate(point.checkedAt);
     const value = document.createElement("span"); value.className = "history-value"; value.textContent = `${formatPrice(point.amount, point.currency)} · ${point.source || "página"}`;
     const removePoint = document.createElement("button"); removePoint.type = "button"; removePoint.className = "history-remove"; removePoint.textContent = "×"; removePoint.title = "Remover este registro"; removePoint.setAttribute("aria-label", "Remover este registro do histórico");
-    removePoint.addEventListener("click", async () => { if (!confirm("Remover este registro do histórico?")) return; item.history.splice(historyIndex, 1); await persist(); renderItems(); });
+    removePoint.addEventListener("click", async () => { if (!confirm("Remover este registro do histórico?")) return; item.history = item.history.filter(row => RadarData.pointKey(row) !== historyKey); await persist(); renderItems(); });
     entry.append(date, value, removePoint); history.append(entry);
   });
   card.append(history);
@@ -1351,13 +1433,13 @@ async function acceptPriceCandidate(item) {
   if (!candidate) return;
   const prior = item.price;
   const alert = evaluatePriceAlert(item, candidate, settings);
-  item.price = { amount: candidate.amount, currency: candidate.currency || "", checkedAt: candidate.checkedAt, source: candidate.source, confidence: candidate.confidence, corroboratingSources: candidate.corroboratingSources || [] };
+  item.price = { amount: candidate.amount, currency: candidate.currency || "", checkedAt: candidate.checkedAt, source: candidate.source, confidence: "confirmed", corroboratingSources: candidate.corroboratingSources || [] };
   if (candidate.regularPrice && Number(candidate.regularPrice.amount) > Number(candidate.amount) && (!candidate.regularPrice.currency || !candidate.currency || candidate.regularPrice.currency === candidate.currency)) {
     item.regularPrice = candidate.regularPrice;
     item.regularPriceObservedAt = candidate.checkedAt;
   }
   item.history = Array.isArray(item.history) ? item.history : [];
-  item.history.push({ amount: candidate.amount, currency: candidate.currency || "", checkedAt: candidate.checkedAt, source: candidate.source || "página", confidence: candidate.confidence || "unknown" });
+  item.history.push({ ...item.price });
   if (item.history.length > 300) item.history = item.history.slice(-300);
   delete item.pendingPriceCandidate;
   delete item.lastCheckError;
@@ -1368,7 +1450,7 @@ async function acceptPriceCandidate(item) {
 }
 
 function buildHistoryChart(item) {
-  const points = (item.history || []).filter(point => Number.isFinite(Number(point.amount)) && Number(point.amount) > 0).slice(-60);
+  const points = (item.history || []).filter(point => Number.isFinite(Number(point.amount)) && Number(point.amount) > 0 && (point.currency || "") === (item.price?.currency || "")).slice(-60);
   if (points.length < 2) return null;
   const wrap = document.createElement("div"); wrap.className = "history-chart";
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -1385,233 +1467,29 @@ function buildHistoryChart(item) {
   wrap.append(svg, caption); return wrap;
 }
 
-async function refreshPrice(item, button, options = {}) {
-  if (button) { button.disabled = true; button.classList.add("is-loading"); button.title = "Lendo preço…"; button.setAttribute("aria-label", "Lendo preço"); }
-  refreshStates.set(item.id, { state: "loading" });
-  if (options.rerender !== false) renderItems();
-  let tabId;
-  try {
-    const url = new URL(item.url);
-    if (!/^https?:$/.test(url.protocol)) throw new Error("Apenas páginas HTTP/HTTPS são aceitas.");
-    if (!options.permissionGranted) {
-      const originPattern = `${url.origin}/*`;
-      const allowed = await chrome.permissions.contains({ origins: [originPattern] }) || await chrome.permissions.request({ origins: [originPattern] });
-      if (!allowed) throw new Error("Acesso ao domínio não foi autorizado.");
-    }
-    const tab = await chrome.tabs.create({ url: item.url, active: false }); tabId = tab.id;
-    await waitForTab(tabId);
-    await delay(1200);
-    let found = null;
-    let extractedRegularPrice = null;
-    let extractedFaviconUrl = "";
-    for (let attempt = 0; attempt < 4 && !found; attempt += 1) {
-      if (attempt) await delay(1500);
-      const [result] = await chrome.scripting.executeScript({ target: { tabId }, func: extractPageInfo, args: [resolveItemSelector(item)] });
-      found = result?.result?.price || null;
-      extractedRegularPrice = result?.result?.regularPrice || null;
-      extractedFaviconUrl = result?.result?.faviconUrl || extractedFaviconUrl;
-    }
-    if (!found) throw new Error("Preço não encontrado. Configure um seletor CSS ou informe o valor manualmente.");
-    const checkedAt = new Date().toISOString();
-    const prior = item.price;
-    const anomaly = settings.priceAnomalyGuardEnabled ? isSuspiciousPriceChange(prior, found, settings.priceAnomalyThresholdPercent) : null;
-    if (anomaly) {
-      item.pendingPriceCandidate = { ...found, regularPrice: extractedRegularPrice, checkedAt, changePercent: anomaly.changePercent, direction: anomaly.direction };
-      refreshStates.set(item.id, { state: "review" });
-      delete item.lastCheckError;
-      delete item.lastCheckErrorAt;
-      await persist();
-      if (options.rerender !== false) renderItems();
-      if (!options.suppressToast) showToast(`Variação de ${anomaly.changePercent.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% guardada para revisão. O preço anterior foi mantido.`, true);
-      return { ok: true, reviewRequired: true, price: found };
-    }
-    const priceDropped = Boolean(prior && (!prior.currency || !found.currency || prior.currency === found.currency) && found.amount < prior.amount);
-    const alert = evaluatePriceAlert(item, found, settings);
-    item.price = { ...found, checkedAt };
-    item.faviconUrl = getSameOriginFaviconUrl(item.url, extractedFaviconUrl) || item.faviconUrl || "";
-    if (extractedRegularPrice && Number(extractedRegularPrice.amount) > Number(found.amount) && (!extractedRegularPrice.currency || !found.currency || extractedRegularPrice.currency === found.currency)) {
-      item.regularPrice = extractedRegularPrice;
-      item.regularPriceObservedAt = checkedAt;
-    }
-    delete item.pendingPriceCandidate;
-    delete item.lastCheckError;
-    delete item.lastCheckErrorAt;
-    item.history = Array.isArray(item.history) ? item.history : [];
-    item.history.push({ amount: found.amount, currency: found.currency || "", checkedAt, source: found.source || "página", confidence: found.confidence || "unknown" });
-    if (item.history.length > 300) item.history = item.history.slice(-300);
-    refreshStates.set(item.id, { state: "success" });
-    await persist();
-    if (options.rerender !== false) renderItems();
-    const alertPayload = alert
-      ? { ...alert, itemId: item.id, itemName: item.offerLabel ? `${item.name} · ${item.offerLabel}` : item.name, price: formatPrice(found.amount, found.currency) }
-      : null;
-    if ((settings.priceAlertsEnabled || settings.priceAlertSoundEnabled) && alertPayload && !options.suppressAlerts) sendPriceAlert(alertPayload);
-    if (!options.suppressToast) showToast(`${formatPrice(found.amount, found.currency)} registrado${priceDropped ? " · preço caiu" : ""}${alert?.kind === "target" ? " · atingiu o alvo" : alert?.kind === "new-low" ? " · novo menor preço" : ""}.`);
-    return { ok: true, price: found, alert: alertPayload };
-  } catch (error) {
-    refreshStates.set(item.id, { state: "error" });
-    item.lastCheckError = error.message || "Falha na verificação.";
-    item.lastCheckErrorAt = new Date().toISOString();
-    await persist().catch(() => {});
-    if (options.rerender !== false) renderItems();
-    if (!options.suppressToast) showToast(error.message || "Não foi possível verificar o preço.", true);
-    return { ok: false, error: error.message || "Falha na verificação." };
-  } finally {
-    if (tabId) { try { await chrome.tabs.remove(tabId); } catch {} }
-    if (button) { button.disabled = false; button.classList.remove("is-loading"); button.title = "Atualizar preço"; button.setAttribute("aria-label", "Atualizar preço"); }
-  }
+async function queueRefresh(items) {
+  const origins = [...new Set(items.map(item => new URL(item.url).origin + "/*"))];
+  if (!origins.length) return;
+  const allowed = await chrome.permissions.request({ origins });
+  if (!allowed) return showToast("Acesso às lojas não concedido. Nenhuma leitura foi iniciada.", true);
+  const response = await chrome.runtime.sendMessage({ type: "radar:refresh", ids: items.map(item => item.id) });
+  if (!response?.ok) throw new Error(response?.error || "Não foi possível iniciar a fila.");
+  await syncQueueStatus();
+  showToast("Atualização iniciada. Você pode fechar o popup; a fila continua com o navegador aberto.");
 }
-
+async function refreshPrice(item) { return queueRefresh([item]); }
+async function refreshAllItems() {
+  if (isBatchUpdating) return;
+  return queueRefresh(data.items.filter(item => !data.products.find(product => product.id === item.productId)?.archived));
+}
+async function refreshProductOffers(product, offers) {
+  if (isBatchUpdating) return;
+  return queueRefresh(offers);
+}
 function sendPriceAlert(alert) {
   if (getQuietHoursActive()) return;
   if (alert.itemId) { const item = data.items.find(row => row.id === alert.itemId); if (!item || itemAlertsMuted(item)) return; }
   chrome.runtime.sendMessage({ type: "radar:price-alert", alert }).catch(() => {});
-}
-
-async function refreshAllItems() {
-  const items = data.items.filter(item => !data.products.find(product => product.id === (item.productId || item.productGroupId))?.archived);
-  if (isBatchUpdating || !items.length) return;
-  const button = document.getElementById("refreshAll");
-  const origins = [...new Set(items.flatMap(item => { try { const url = new URL(item.url); return /^https?:$/.test(url.protocol) ? [`${url.origin}/*`] : []; } catch { return []; } }))];
-  if (!origins.length) return showToast("Nenhum item tem um endereço HTTP/HTTPS válido.", true);
-  isBatchUpdating = true;
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  button.classList.add("is-loading");
-  button.title = "Preparando atualização em lote…";
-  button.setAttribute("aria-label", button.title);
-  const progressPanel = document.getElementById("batchProgress");
-  const progressText = document.getElementById("batchProgressText");
-  const progressCount = document.getElementById("batchProgressCount");
-  const progressBar = document.getElementById("batchProgressBar");
-  progressPanel.classList.remove("hidden");
-  progressText.textContent = "Solicitando acesso aos sites…";
-  progressCount.textContent = `0 / ${items.length}`;
-  progressBar.max = items.length;
-  progressBar.value = 0;
-  renderItems();
-  let updated = 0;
-  let failed = 0;
-  let reviewRequired = 0;
-  const alerts = [];
-  const failedNames = [];
-  try {
-    const allowed = await chrome.permissions.request({ origins });
-    if (!allowed) throw new Error("A permissão para um ou mais sites não foi concedida.");
-    for (let index = 0; index < items.length; index += 1) {
-      progressText.textContent = `Lendo ${items[index].offerLabel || getSiteHost(items[index].url)}…`;
-      refreshStates.set(items[index].id, { state: "loading" });
-      renderItems();
-      const result = await refreshPrice(items[index], null, { permissionGranted: true, suppressToast: true, suppressAlerts: true, rerender: false });
-      if (result.reviewRequired) reviewRequired += 1;
-      else if (result.ok) { updated += 1; if (result.alert && !itemAlertsMuted(items[index])) alerts.push(result.alert); }
-      else { failed += 1; failedNames.push(items[index].name); }
-      progressCount.textContent = `${index + 1} / ${items.length}`;
-      progressBar.value = index + 1;
-      renderItems();
-    }
-    if ((settings.priceAlertsEnabled || settings.priceAlertSoundEnabled) && alerts.length && !getQuietHoursActive()) {
-      const hitTarget = alerts.some(alert => alert.kind === "target");
-      sendPriceAlert({
-        kind: "summary",
-        badgeText: hitTarget ? "!" : "↓",
-        itemName: `${alerts.length} ${alerts.length === 1 ? "item teve" : "itens tiveram"} uma condição de alerta`,
-        price: "Abra o Radar para ver os valores."
-      });
-    }
-    const failedSummary = failedNames.length ? ` · Falha: ${failedNames.slice(0, 2).join(", ")}${failedNames.length > 2 ? "…" : ""}` : "";
-    const updatedLabel = updated === 1 ? "1 item atualizado" : `${updated} itens atualizados`;
-    const reviewSummary = reviewRequired ? ` · ${reviewRequired} para revisar` : "";
-    progressText.textContent = `${updatedLabel}${reviewSummary}${failed ? ` · ${failed} falharam` : " · tudo concluído"}.`;
-    showToast(`${updatedLabel}${reviewSummary}${failed ? ` · ${failed} ${failed === 1 ? "falhou" : "falharam"}${failedSummary}` : ""}.`, failed > 0);
-  } catch (error) {
-    progressText.textContent = error.message || "Não foi possível iniciar a atualização em lote.";
-    showToast(error.message || "Não foi possível iniciar a atualização em lote.", true);
-  } finally {
-    isBatchUpdating = false;
-    button.removeAttribute("aria-busy");
-    button.classList.remove("is-loading");
-    renderAll();
-  }
-}
-
-async function refreshProductOffers(product, offers) {
-  if (isBatchUpdating || productRefreshStates.has(product.id)) return;
-  const origins = [...new Set(offers.flatMap(item => {
-    try {
-      const url = new URL(item.url);
-      return /^https?:$/.test(url.protocol) ? [`${url.origin}/*`] : [];
-    } catch { return []; }
-  }))];
-  if (!origins.length) return showToast("Nenhuma loja tem um endereço HTTP/HTTPS válido.", true);
-
-  isBatchUpdating = true;
-  productRefreshStates.add(product.id);
-  const progressPanel = document.getElementById("batchProgress");
-  const progressText = document.getElementById("batchProgressText");
-  const progressCount = document.getElementById("batchProgressCount");
-  const progressBar = document.getElementById("batchProgressBar");
-  progressPanel.classList.remove("hidden");
-  progressText.textContent = `Atualizando lojas de ${product.name}…`;
-  progressCount.textContent = `0 / ${offers.length}`;
-  progressBar.max = offers.length;
-  progressBar.value = 0;
-  renderItems();
-
-  let updated = 0;
-  let failed = 0;
-  let reviewRequired = 0;
-  const alerts = [];
-  try {
-    const allowed = await chrome.permissions.request({ origins });
-    if (!allowed) throw new Error("A permissão para uma ou mais lojas não foi concedida.");
-
-    for (let index = 0; index < offers.length; index += 1) {
-      const item = offers[index];
-      progressText.textContent = `Lendo ${item.offerLabel || getSiteHost(item.url)}…`;
-      refreshStates.set(item.id, { state: "loading" });
-      renderItems();
-      const result = await refreshPrice(item, null, { permissionGranted: true, suppressToast: true, suppressAlerts: true, rerender: false });
-      if (result.reviewRequired) reviewRequired += 1;
-      else if (result.ok) {
-        updated += 1;
-        if (result.alert && !itemAlertsMuted(item)) alerts.push(result.alert);
-      } else failed += 1;
-      progressCount.textContent = `${index + 1} / ${offers.length}`;
-      progressBar.value = index + 1;
-      renderItems();
-    }
-
-    if ((settings.priceAlertsEnabled || settings.priceAlertSoundEnabled) && alerts.length && !getQuietHoursActive()) {
-      sendPriceAlert({
-        kind: "summary",
-        badgeText: alerts.some(alert => alert.kind === "target") ? "!" : "↓",
-        itemName: `${alerts.length} ${alerts.length === 1 ? "loja teve" : "lojas tiveram"} uma condição de alerta`,
-        price: `Produto: ${product.name}`
-      });
-    }
-    const resultText = `${updated} ${updated === 1 ? "loja atualizada" : "lojas atualizadas"}${reviewRequired ? ` · ${reviewRequired} para revisar` : ""}${failed ? ` · ${failed} falharam` : ""}.`;
-    progressText.textContent = resultText;
-    showToast(resultText, failed > 0);
-  } catch (error) {
-    progressText.textContent = error.message || "Não foi possível atualizar as lojas do produto.";
-    showToast(error.message || "Não foi possível atualizar as lojas do produto.", true);
-  } finally {
-    productRefreshStates.delete(product.id);
-    isBatchUpdating = false;
-    renderAll();
-  }
-}
-
-function waitForTab(tabId) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); reject(new Error("A página demorou demais para carregar.")); }, 25000);
-    const listener = (changedId, changeInfo) => {
-      if (changedId === tabId && changeInfo.status === "complete") { clearTimeout(timeout); chrome.tabs.onUpdated.removeListener(listener); resolve(); }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-    chrome.tabs.get(tabId).then(tab => { if (tab.status === "complete") { clearTimeout(timeout); chrome.tabs.onUpdated.removeListener(listener); resolve(); } }).catch(reject);
-  });
 }
 
 function renderFolders() {
@@ -1647,14 +1525,16 @@ async function renderSettings() {
   if (settings.priceAlertsEnabled && !await chrome.permissions.contains({ permissions: ["notifications"] }).catch(() => false)) {
     settings.priceAlertsEnabled = false;
     alertPreferencesChanged = true;
-  } else if (settings.priceAlertSoundEnabled && !await chrome.permissions.contains({ permissions: ["offscreen"] }).catch(() => false)) {
+  }
+  if (settings.priceAlertSoundEnabled && !await chrome.permissions.contains({ permissions: ["offscreen"] }).catch(() => false)) {
     settings.priceAlertSoundEnabled = false;
     alertPreferencesChanged = true;
-  } else if (settings.contextMenuEnabled && !await chrome.permissions.contains({ permissions: ["contextMenus"] }).catch(() => false)) {
+  }
+  if (settings.contextMenuEnabled && !await chrome.permissions.contains({ permissions: ["contextMenus"] }).catch(() => false)) {
     settings.contextMenuEnabled = false;
     alertPreferencesChanged = true;
   }
-  if (alertPreferencesChanged) await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  if (alertPreferencesChanged) { const next = RadarData.clone(settings); await RadarData.saveSettings(settingsBaseline, next); settingsBaseline = next; }
   document.getElementById("priceAlertsEnabled").checked = settings.priceAlertsEnabled;
   const soundToggle = document.getElementById("priceAlertSoundEnabled");
   soundToggle.checked = settings.priceAlertSoundEnabled;
@@ -1729,54 +1609,58 @@ function renderSiteProfiles() {
 }
 
 async function syncQueueStatus() {
-  const queue = (await chrome.storage.local.get("radarLocalAutoQueue")).radarLocalAutoQueue;
-  const last = (await chrome.storage.local.get(AUTO_STATUS_KEY))[AUTO_STATUS_KEY];
+  const stored = await chrome.storage.local.get(["radarLocalAutoQueue", AUTO_STATUS_KEY]);
+  const queue = stored.radarLocalAutoQueue;
+  const last = stored[AUTO_STATUS_KEY];
+  const state = queue || last;
+  isBatchUpdating = Boolean(queue?.ids?.length);
+  refreshStates.clear();
+  for (const [id, result] of Object.entries(state?.results || {})) refreshStates.set(id, result);
+  if (queue?.currentId) refreshStates.set(queue.currentId, { state: "loading" });
   const controls = document.getElementById("startupQueueControls");
-  if (!controls) return;
   controls.classList.toggle("hidden", !queue?.ids?.length);
   document.getElementById("pauseStartupQueue").textContent = queue?.paused ? "Retomar fila" : "Pausar fila";
-  const status = document.getElementById("startupRefreshStatus");
-  if (queue?.ids?.length) status.textContent = `${queue.paused ? "Fila pausada" : "Fila em andamento"}: ${queue.updated || 0} atualizado(s), ${queue.review || 0} para revisar, ${queue.ids.length} restante(s).`;
-  else if (settings.startupRefreshEnabled && last?.lastRun) status.textContent = `Última execução: ${formatDate(last.lastRun)} · ${last.updated || 0} atualizados${last.review ? ` · ${last.review} para revisar` : ""}${last.skipped ? ` · ${last.skipped} ignorados` : ""}.`;
+  const completed = (state?.updated || 0) + (state?.review || 0) + (state?.skipped || 0);
+  const total = completed + (queue?.ids?.length || 0);
+  document.getElementById("batchProgress").classList.toggle("hidden", !state || !total);
+  document.getElementById("batchProgressCount").textContent = completed + " / " + total;
+  document.getElementById("batchProgressBar").max = total || 1;
+  document.getElementById("batchProgressBar").value = completed;
+  const copy = state?.error || (queue ? (queue.paused ? "Fila pausada" : "Atualizando uma loja por vez") : "Atualização concluída") + " · " + (state?.updated || 0) + " atualizadas · " + (state?.review || 0) + " para revisar · " + (state?.skipped || 0) + " falhas";
+  document.getElementById("batchProgressText").textContent = copy;
+  document.getElementById("startupRefreshStatus").textContent = copy;
+  updateRefreshAllButton();
+  if (!document.activeElement?.matches("input, textarea, select")) renderItems();
 }
-
 async function controlStartupQueue(action) {
-  const stored = (await chrome.storage.local.get("radarLocalAutoQueue")).radarLocalAutoQueue;
-  if (!stored?.ids?.length) return renderSettings();
-  if (action === "cancel") {
-    await chrome.alarms.clear("radar-local-startup-refresh");
-    await chrome.storage.local.remove("radarLocalAutoQueue");
-    showToast("Fila automática cancelada.");
-  } else {
-    stored.paused = !stored.paused;
-    await chrome.storage.local.set({ radarLocalAutoQueue: stored });
-    if (stored.paused) await chrome.alarms.clear("radar-local-startup-refresh");
-    else await chrome.alarms.create("radar-local-startup-refresh", { delayInMinutes: 1 });
-    showToast(stored.paused ? "Fila pausada." : "Fila retomada.");
-  }
-  await renderSettings();
+  const response = await chrome.runtime.sendMessage({ type: "radar:queue-control", action });
+  if (!response?.ok) throw new Error(response?.error || "Não foi possível alterar a fila.");
+  await syncQueueStatus();
 }
 
 async function exportBackup() {
-  const payload = { app: "Radar Local", schemaVersion: 2, exportedAt: new Date().toISOString(), ...data, settings };
+  const snapshot = await RadarData.read();
+  const savedSettings = await loadSettings();
+  const payload = { app: "Radar Local", schemaVersion: 3, exportedAt: new Date().toISOString(), ...snapshot, settings: savedSettings };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
   anchor.href = url; anchor.download = `radar-local-backup-${new Date().toISOString().slice(0, 10)}.json`; anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000); showToast("Backup JSON exportado.");
 }
 
-function exportCsv() {
+async function exportCsv() {
+  const snapshot = await RadarData.read();
   const escapeCell = value => {
     let text = String(value ?? "");
-    if (typeof value === "string" && /^[\t\r ]*[=+\-@]/.test(text)) text = `'${text}`;
+    if (typeof value === "string" && (/^[\s\u0000-\u001f]*[=+\-@]/.test(text) || /^[\t\r\n]/.test(text))) text = `'${text}`;
     return `"${text.replace(/"/g, '""')}"`;
   };
   const rows = [["Produto", "Status do produto", "Loja", "URL", "Preço registrado", "Moeda", "Preço-alvo", "Data da verificação", "Origem", "Confiança", "Disponibilidade", "Pasta", "Erro da última verificação"]];
-  for (const item of data.items) {
+  for (const item of snapshot.items) {
     const history = (item.history || []).filter(point => Number.isFinite(Number(point.amount)) && Number(point.amount) > 0);
     if (!history.length && item.price) history.push(item.price);
-    const product = data.products.find(row => row.id === (item.productId || item.productGroupId));
-    const folder = data.folders.find(row => row.id === item.folderId)?.name || "Sem pasta";
+    const product = snapshot.products.find(row => row.id === (item.productId || item.productGroupId));
+    const folder = snapshot.folders.find(row => row.id === item.folderId)?.name || "Sem pasta";
     const availability = item.availability === "in-stock" ? "Disponível" : item.availability === "out-of-stock" ? "Esgotado" : "Não informada";
     for (const point of history) rows.push([item.name, product?.archived ? (product.archiveReason === "purchased" ? "Comprado/arquivado" : "Arquivado") : "Ativo", item.offerLabel || getSiteHost(item.url), item.url, point.amount, point.currency || "", item.target ?? "", point.checkedAt || "", point.source || "", point.confidence || "", availability, folder, item.lastCheckError || ""]);
     if (!history.length) rows.push([item.name, product?.archived ? "Arquivado" : "Ativo", item.offerLabel || getSiteHost(item.url), item.url, "", "", item.target ?? "", "", "", "", availability, folder, item.lastCheckError || ""]);
@@ -1790,113 +1674,54 @@ function exportCsv() {
 async function importBackup(event) {
   const file = event.target.files?.[0]; event.target.value = ""; if (!file) return;
   try {
+    if (file.size > 9 * 1024 * 1024) throw new Error("O backup excede 9 MB. Divida ou reduza o histórico antes de importar.");
     const parsed = JSON.parse(await file.text());
-    if (!Array.isArray(parsed.folders) || !Array.isArray(parsed.items)) throw new Error("Este arquivo não parece ser um backup do Radar Local.");
+    if (parsed.schemaVersion != null && (!Number.isInteger(parsed.schemaVersion) || parsed.schemaVersion > 3 || parsed.schemaVersion < 1)) throw new Error("Versão de backup não suportada por esta extensão.");
+    const incoming = RadarData.normalize(parsed);
     const mode = document.getElementById("backupImportMode").value;
-    if (mode === "merge") {
-      if (!confirm(`Mesclar ${parsed.folders.length} pastas e ${parsed.items.length} itens com os dados atuais? URLs repetidas serão combinadas pelo histórico mais recente. Suas configurações não serão alteradas.`)) return;
-      data = mergeBackupData(parsed);
-    } else {
-      if (!confirm(`Substituir os dados atuais por ${parsed.folders.length} pastas e ${parsed.items.length} itens?${parsed.settings ? " As configurações também serão substituídas." : ""} Exporte um backup antes se quiser voltar atrás.`)) return;
-      data = normalizeProductData({ ...parsed, siteProfiles: Array.isArray(parsed.siteProfiles) ? parsed.siteProfiles : [] });
-    }
-    if (mode === "replace" && parsed.settings && typeof parsed.settings === "object") {
-      settings = normalizeSettings(parsed.settings);
-      if (settings.defaultFolderId !== NO_FOLDER && !data.folders.some(folder => folder.id === settings.defaultFolderId)) settings.defaultFolderId = NO_FOLDER;
-      await persistSettings();
-    }
-    await persist();
-    await chrome.runtime.sendMessage({ type: "radar:context-menu", enabled: settings.contextMenuEnabled }).catch(() => {});
-    if (!settings.contextMenuEnabled) await chrome.permissions.remove({ permissions: ["contextMenus"] }).catch(() => {});
-    renderAll(); showToast(mode === "merge" ? "Backup mesclado neste navegador." : "Backup importado neste navegador.");
-  } catch (error) { showToast(error.message || "Não foi possível importar o arquivo.", true); }
+    if (!confirm(mode === "merge" ? "Mesclar este backup com os dados atuais?" : "Substituir todos os dados e preferências pelo backup? Exporte uma cópia antes para poder voltar.")) return;
+    const before = await RadarData.read();
+    let nextSettings = null;
+    const next = mode === "merge" ? mergeBackupData(incoming, before) : incoming;
+    if (mode !== "merge" && parsed.settings && typeof parsed.settings === "object") nextSettings = normalizeSettings(parsed.settings);
+    await RadarData.replace(before, next, nextSettings);
+    if (nextSettings) { settings = nextSettings; settingsBaseline = RadarData.clone(settings); }
+    await synchronizeData();
+    await chrome.runtime.sendMessage({ type: "radar:context-menu" });
+    showToast("Backup importado com sucesso.");
+  } catch (error) { showOperationError(error); }
 }
-
-function mergeBackupData(parsed) {
-  parsed = normalizeProductData(parsed);
-  const merged = { folders: [...data.folders], products: [...data.products], items: [...data.items], siteProfiles: [...(data.siteProfiles || [])], favicons: { ...(data.favicons || {}), ...(parsed.favicons || {}) } };
-  const productGroupMap = new Map();
-  for (const profile of parsed.siteProfiles || []) {
-    if (!merged.siteProfiles.some(row => row.host === profile.host)) merged.siteProfiles.push({ ...profile });
-  }
+function mergeBackupData(parsed, current = data) {
+  const merged = RadarData.clone(current), incoming = RadarData.normalize(parsed);
   const folderMap = new Map();
-  for (const incoming of parsed.folders) {
-    let match = merged.folders.find(folder => folder.id === incoming.id) || merged.folders.find(folder => folder.name?.trim().toLowerCase() === incoming.name?.trim().toLowerCase());
-    if (!match) { match = { ...incoming, id: merged.folders.some(folder => folder.id === incoming.id) ? crypto.randomUUID() : incoming.id || crypto.randomUUID() }; merged.folders.push(match); }
-    folderMap.set(incoming.id, match.id);
+  for (const folder of incoming.folders) {
+    let match = merged.folders.find(row => row.name.toLowerCase() === folder.name.toLowerCase());
+    if (!match) { match = { ...folder, id: merged.folders.some(row => row.id === folder.id) ? crypto.randomUUID() : folder.id }; merged.folders.push(match); }
+    folderMap.set(folder.id, match.id);
   }
-  for (const incoming of parsed.items) {
-    const groupKey = incoming.productGroupId || incoming.id;
-    const existing = merged.items.find(item => normalizeItemUrl(item.url) === normalizeItemUrl(incoming.url));
-    if (existing && groupKey) productGroupMap.set(groupKey, existing.productGroupId || existing.id);
+  const productMap = new Map();
+  for (const product of incoming.products) {
+    const matches = new Set(incoming.items.filter(item => item.productId === product.id).map(item => merged.items.find(row => normalizeItemUrl(row.url) === normalizeItemUrl(item.url))?.productId).filter(Boolean));
+    if (matches.size > 1) throw new Error("O backup reúne URLs que estão em produtos diferentes. Organize esses produtos antes de mesclar.");
+    let match = merged.products.find(row => matches.has(row.id));
+    if (!match) { match = { ...product, id: merged.products.some(row => row.id === product.id) ? crypto.randomUUID() : product.id, folderId: folderMap.get(product.folderId) || NO_FOLDER }; merged.products.push(match); }
+    productMap.set(product.id, match.id);
   }
-  for (const incomingProduct of parsed.products) {
-    const mapped = productGroupMap.get(incomingProduct.id);
-    let existing = mapped ? merged.products.find(product => product.id === mapped) : merged.products.find(product => product.id === incomingProduct.id);
-    if (!existing) {
-      const product = { ...incomingProduct };
-      if (merged.products.some(row => row.id === product.id)) product.id = crypto.randomUUID();
-      existing = product; merged.products.push(product);
-    } else {
-      if (existing.target == null && incomingProduct.target != null) existing.target = incomingProduct.target;
-      if (!existing.folderId || existing.folderId === NO_FOLDER) existing.folderId = folderMap.get(incomingProduct.folderId) || incomingProduct.folderId || NO_FOLDER;
-    }
-    productGroupMap.set(incomingProduct.id, existing.id);
+  for (const item of incoming.items) {
+    const existing = merged.items.find(row => normalizeItemUrl(row.url) === normalizeItemUrl(item.url));
+    if (!existing) { merged.items.push({ ...item, id: merged.items.some(row => row.id === item.id) ? crypto.randomUUID() : item.id, productId: productMap.get(item.productId), productGroupId: productMap.get(item.productId) }); continue; }
+    const history = new Map([...existing.history, ...item.history].map(point => [RadarData.pointKey(point), point]));
+    existing.history = [...history.values()].sort((a, b) => Date.parse(a.checkedAt) - Date.parse(b.checkedAt)).slice(-300);
+    if ((Date.parse(item.price?.checkedAt || "") || 0) > (Date.parse(existing.price?.checkedAt || "") || 0)) existing.price = item.price;
+    if (item.regularPrice && (Date.parse(item.regularPriceObservedAt || "") || 0) > (Date.parse(existing.regularPriceObservedAt || "") || 0)) { existing.regularPrice = item.regularPrice; existing.regularPriceObservedAt = item.regularPriceObservedAt; }
   }
-  for (const incoming of parsed.items) {
-    const incomingItem = { ...incoming, history: Array.isArray(incoming.history) ? [...incoming.history] : [], folderId: folderMap.get(incoming.folderId) || NO_FOLDER };
-    const existing = merged.items.find(item => normalizeItemUrl(item.url) === normalizeItemUrl(incoming.url));
-    const groupKey = incoming.productGroupId || incoming.id;
-    if (productGroupMap.has(groupKey)) incomingItem.productId = incomingItem.productGroupId = productGroupMap.get(groupKey);
-    else if (groupKey) {
-      const usedGroupIds = new Set(merged.items.map(row => row.productGroupId || row.id));
-      incomingItem.productGroupId = usedGroupIds.has(groupKey) ? crypto.randomUUID() : groupKey;
-      incomingItem.productId = incomingItem.productGroupId;
-      productGroupMap.set(groupKey, incomingItem.productGroupId);
-    }
-    const mappedProduct = merged.products.find(product => product.id === incomingItem.productId);
-    if (mappedProduct) { incomingItem.name = mappedProduct.name; incomingItem.folderId = mappedProduct.folderId || incomingItem.folderId; incomingItem.target = mappedProduct.target ?? incomingItem.target ?? null; }
-    if (!existing) {
-      incomingItem.id = incomingItem.id || crypto.randomUUID();
-      if (merged.items.some(item => item.id === incomingItem.id)) incomingItem.id = crypto.randomUUID();
-      merged.items.push(incomingItem);
-      continue;
-    }
-    const points = [...(existing.history || []), ...incomingItem.history];
-    const unique = new Map(points.map(point => [`${point.checkedAt}|${point.amount}|${point.currency}|${point.source}`, point]));
-    existing.history = [...unique.values()].sort((a, b) => (Date.parse(a.checkedAt) || 0) - (Date.parse(b.checkedAt) || 0)).slice(-300);
-    const incomingTime = Date.parse(incomingItem.price?.checkedAt || "") || 0;
-    const existingTime = Date.parse(existing.price?.checkedAt || "") || 0;
-    if (incomingItem.productId) existing.productId = existing.productGroupId = incomingItem.productId;
-    if (incomingItem.price && incomingTime > existingTime) existing.price = incomingItem.price;
-    if (incomingItem.regularPrice && (!existing.regularPriceObservedAt || Date.parse(incomingItem.regularPriceObservedAt) > Date.parse(existing.regularPriceObservedAt))) { existing.regularPrice = incomingItem.regularPrice; existing.regularPriceObservedAt = incomingItem.regularPriceObservedAt; }
-    if (existing.target == null && incomingItem.target != null) existing.target = incomingItem.target;
-    if (!existing.selector && incomingItem.selector) existing.selector = incomingItem.selector;
-    if (!existing.folderId || existing.folderId === NO_FOLDER) existing.folderId = incomingItem.folderId;
-    if (!existing.pendingPriceCandidate && incomingItem.pendingPriceCandidate) existing.pendingPriceCandidate = incomingItem.pendingPriceCandidate;
-  }
-  return merged;
+  for (const profile of incoming.siteProfiles) if (!merged.siteProfiles.some(row => row.host === profile.host)) merged.siteProfiles.push(profile);
+  merged.favicons = { ...incoming.favicons, ...merged.favicons };
+  return RadarData.normalize(merged);
 }
 
-function normalizeItemUrl(value) {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    [...url.searchParams.keys()].forEach(key => { if (/^(utm_.+|fbclid|gclid|mc_cid|mc_eid)$/i.test(key)) url.searchParams.delete(key); });
-    url.searchParams.sort();
-    return url.href;
-  } catch { return String(value || "").trim(); }
-}
-function parseUserPrice(value) {
-  const clean = String(value || "").trim().replace(/\s/g, "").replace(/[^\d,.-]/g, "");
-  if (!clean) return null;
-  let normalized = clean;
-  if (clean.includes(",") && clean.includes(".")) normalized = clean.lastIndexOf(",") > clean.lastIndexOf(".") ? clean.replace(/\./g, "").replace(",", ".") : clean.replace(/,/g, "");
-  else if (clean.includes(",")) normalized = clean.replace(",", ".");
-  const amount = Number(normalized);
-  const roundedAmount = Math.round((amount + Number.EPSILON) * 100) / 100;
-  return Number.isFinite(roundedAmount) && roundedAmount >= 0 ? { amount: roundedAmount, currency: "" } : null;
-}
+function normalizeItemUrl(value) { return RadarData.normalizedUrl(value); }
+function parseUserPrice(value) { return RadarMoney.parse(value, "", true); }
 
 function formatPrice(amount, currency) {
   if (!Number.isFinite(Number(amount))) return "Sem preço";

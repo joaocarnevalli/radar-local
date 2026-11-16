@@ -1,0 +1,20 @@
+Radar Local 0.2.0 — reviewer instructions
+
+No Radar account, login, payment or API key is required. The UI is in Brazilian Portuguese. All extension records are stored in chrome.storage.local.
+
+Basic flow:
+1. Open a public product page with a visible price. Invoke the extension and click “Monitorar esta página”. Review the prefilled name and amount. If the value is ambiguous, tick the confirmation after checking the page, or enter a corrected amount. Click “Salvar”.
+2. Expand the product and its store. Use the pencil by the price for manual correction. “Histórico” shows saved observations. “Seletor CSS (avançado)” accepts a single, precise price element selector.
+3. “+ Produto” creates a product without capturing a page; expand it and use “Adicionar URL” to add stores. Multiple URLs are offers of the same user-defined product. Grouping does not automatically establish that variants are equivalent.
+4. The refresh icon reads one offer; the top refresh icon queues all active offers. A multi-store product has a refresh action inside its expanded area. Grant the requested site origin permission to test refreshes. Temporary tabs load sequentially in the background. Closing the popup does not cancel the queue. A tab brought into the foreground is left open.
+5. In “Pastas”, create a folder and select its identification color. In “Configurações”, adjust queue pace and staleness, optional price alerts, sound/volume, quiet hours and reading profiles. Startup refresh is off by default and takes effect at browser startup. Queue controls appear when a queue exists.
+6. “Testar som” requests optional offscreen permission and plays a locally generated tone. Notification permission is requested when notification alerts are enabled. Selected-price context-menu capture is separately opt-in.
+7. “Painel” opens the complete interface in a larger extension page. The floating-window icon opens another browser window using the same local records. JSON backup and CSV export are local downloads. JSON import is available in “Pastas”.
+
+Reading behavior:
+The extractor prefers visible product-price elements, excludes identified percentage badges/installments/recommendations, and uses structured sources conservatively. Ambiguous candidates and changed currencies need review; failures preserve the last accepted price. If a public site blocks automation or changes its layout, use a manual price or a precise CSS selector. There is no claim of support for every marketplace, and no external historical-price API.
+
+Permissions and data handling:
+Host patterns are optional because users choose arbitrary stores. Only the requested origins are granted at runtime. The tabs permission supports source-page selection, redirect checks and loading-state checks; no general browsing history is stored. No extension code is remotely hosted, no analytics is sent, and no backend receives saved records. Normal store-page navigation can use the user's existing cookies/session.
+
+The listing screenshots use fictional products, stores, prices and reserved .example URLs as demonstration data. Those records and the screenshot driver are not included in the uploaded extension ZIP. To test live extraction, use a real public product page of your choice.

@@ -43,6 +43,7 @@
           </div>
           <label>Pasta<select id="itemFolder"></select></label>
           <label>Seletor CSS (opcional)<input id="itemSelector" placeholder="Ex.: [itemprop='price']"></label>
+          <label id="captureReview" class="hidden"><input id="captureReviewConfirmed" type="checkbox">Conferi este preço no site, incluindo variante e forma de pagamento.</label>
           <div class="row-actions">
             <button id="saveItem" class="primary">Salvar</button>
             <button id="cancelAdd" class="secondary">Cancelar</button>
@@ -241,6 +242,8 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="money.js"></script>
+  <script src="data-store.js"></script>
   <script src="price-extractor.js"></script>
   <script src="popup.js"></script>
 </body>

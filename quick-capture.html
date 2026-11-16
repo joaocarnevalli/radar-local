@@ -17,6 +17,7 @@
       <label>Produto<input id="captureName" maxlength="140" required></label>
       <label>Texto selecionado<textarea id="captureSelection" rows="3" readonly></textarea></label>
       <label>Valor a salvar<input id="captureAmount" inputmode="decimal" placeholder="Ex.: 1.899,90" required></label>
+      <label>Moeda<input id="captureCurrency" maxlength="3" placeholder="BRL, USD, EUR…" aria-label="Código da moeda"></label>
       <label>Este valor é<select id="captureKind"><option value="current">Preço atual</option><option value="regular">Preço normal / anterior</option></select></label>
       <label id="captureFolderLabel">Pasta<select id="captureFolder"></select></label>
       <div class="url" id="captureUrl"></div>
@@ -24,6 +25,8 @@
       <small class="form-note">Confira se a seleção é o preço atual ou o preço normal antes de salvar. O valor será registrado como entrada manual.</small>
     </form>
   </main>
+  <script src="money.js"></script>
+  <script src="data-store.js"></script>
   <script src="quick-capture.js"></script>
 </body>
 </html>
