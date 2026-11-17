@@ -24,10 +24,17 @@ jobs:
       - name: Testes unitários
         run: node --test tests/data.test.cjs
 
-      - name: Testes no navegador (Chrome headless, fixtures locais)
+      # O Google Chrome oficial (137+) ignora --load-extension; o Chrome for Testing aceita.
+      - name: Instalar Chrome for Testing
+        run: |
+          npx -y @puppeteer/browsers@2 install chrome@stable --path "$RUNNER_TEMP/browsers"
+          chrome=$(find "$RUNNER_TEMP/browsers" -type f -name chrome -path '*chrome-linux64*' | head -n 1)
+          test -x "$chrome"
+          "$chrome" --version
+          echo "RADAR_BROWSER=$chrome" >> "$GITHUB_ENV"
+
+      - name: Testes no navegador (headless, fixtures locais)
         run: node tests/browser.cjs
-        env:
-          RADAR_BROWSER: /usr/bin/google-chrome
 
       - name: Guardar capturas em caso de falha
         if: failure()

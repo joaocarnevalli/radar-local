@@ -115,7 +115,8 @@ async function launch({ origins, fixture }) {
   };
   try {
     await cdp.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
-    const worker = await until(async () => (await cdp.send('Target.getTargets')).targetInfos.find(t => t.type === 'service_worker' && t.url.endsWith('/src/background/service-worker.js')));
+    const worker = await until(async () => (await cdp.send('Target.getTargets')).targetInfos.find(t => t.type === 'service_worker' && t.url.endsWith('/src/background/service-worker.js')), 20000)
+      .catch(() => { throw new Error(`A extensão não carregou em ${binary}. O Google Chrome oficial (137+) ignora --load-extension; use Brave, Edge, Chromium ou o Chrome for Testing e aponte RADAR_BROWSER para ele.`); });
     const extensionOrigin = worker.url.replace('/src/background/service-worker.js', '');
     const driver = await cdp.page(extensionOrigin + '/src/test-driver.html');
     return { cdp, child, workspace, extensionOrigin, workerSession: driver.session, close };
