@@ -1,0 +1,38 @@
+name: Testes
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Referências de arquivos e pacote
+        run: node tools/check-files.cjs
+
+      - name: Testes unitários
+        run: node --test tests/data.test.cjs
+
+      - name: Testes no navegador (Chrome headless, fixtures locais)
+        run: node tests/browser.cjs
+        env:
+          RADAR_BROWSER: /usr/bin/google-chrome
+
+      - name: Guardar capturas em caso de falha
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-do-teste
+          path: .test-artifacts/**/*.png
+          if-no-files-found: ignore

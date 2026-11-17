@@ -16,6 +16,8 @@ $outputDirectory = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $zipPath = Join-Path $outputDirectory ("radar-local-{0}-chrome-web-store.zip" -f $manifest.version)
 $temporaryZip = Join-Path $outputDirectory ([Guid]::NewGuid().ToString() + '.zip')
+# Windows PowerShell 5.1 precisa das duas: ZipArchiveMode fica em System.IO.Compression.
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::Open($temporaryZip, [IO.Compression.ZipArchiveMode]::Create)
 try {
