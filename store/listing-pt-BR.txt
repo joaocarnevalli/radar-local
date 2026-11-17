@@ -14,8 +14,9 @@ O Radar Local ajuda a acompanhar produtos, cursos, certificações e jogos em p�
 • Histórico local: consulte os valores registrados e um gráfico das leituras recentes.
 • Preço-alvo e alertas opcionais: configure notificações, oito estilos de som, volume e horário de silêncio.
 • Atualização em sequência: verifique uma loja, todas as lojas de um produto ou toda a lista. A fila continua ao fechar o popup, enquanto o navegador estiver aberto.
-• Automação opcional: ao iniciar o navegador, atualize itens desatualizados, uma página por vez, com intervalo configurável.
-• Controle da leitura: revise valores duvidosos, corrija manualmente ou configure um seletor CSS para a página ou o domínio.
+• Automação opcional: ao iniciar o navegador e, se quiser, a cada 1 a 24 horas, atualize itens desatualizados, uma página por vez.
+• Leitura que aprende: o Radar memoriza o elemento do preço confirmado; você também pode clicar no preço da loja para travá-lo no site todo, ou revisar e corrigir manualmente.
+• Estoque automático: acompanha a disponibilidade informada pela página, com opção de marcar à mão.
 • Backup JSON e CSV: exporte seus dados e histórico quando quiser.
 • Popup, painel e janela flutuante: escolha o espaço de trabalho que preferir.
 

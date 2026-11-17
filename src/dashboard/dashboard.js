@@ -1,6 +1,13 @@
 const frame = document.getElementById("radarApp");
-const sourceTab = Number(new URLSearchParams(location.search).get("sourceTab"));
-if (sourceTab > 0) frame.src = "popup.html?dashboard=1&embedded=1&sourceTab=" + sourceTab;
+const pageParams = new URLSearchParams(location.search);
+const sourceTab = Number(pageParams.get("sourceTab"));
+const focusItem = pageParams.get("focusItem") || "";
+if (sourceTab > 0 || /^[a-zA-Z0-9_.:-]{1,160}$/.test(focusItem)) {
+  const frameParams = new URLSearchParams({ dashboard: "1", embedded: "1" });
+  if (sourceTab > 0) frameParams.set("sourceTab", String(sourceTab));
+  if (/^[a-zA-Z0-9_.:-]{1,160}$/.test(focusItem)) frameParams.set("focusItem", focusItem);
+  frame.src = "../popup/popup.html?" + frameParams;
+}
 const navButtons = [...document.querySelectorAll(".side-nav-link")];
 const activeViewTitle = document.getElementById("activeViewTitle");
 let selectedView = "itemsView";

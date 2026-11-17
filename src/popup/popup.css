@@ -444,6 +444,13 @@ select:focus { border-color: var(--accent); background-color: #1b1b1b; }
 .site-profile-host { color: var(--white); font-size: 11px; }
 .site-profile-row input { min-height: 31px; padding: 5px 7px; font-size: 10px; }
 .site-profile-row .row-actions button { min-height: 28px; padding: 4px 8px; font-size: 10px; }
+.site-profile-meta { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.site-profile-code { display: block; overflow: hidden; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; background: #0000004d; color: #d6d6d6; font: 10px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.lock-actions { display: grid; gap: 6px; margin-top: 10px; }
+.lock-hint { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.site-profile-form { display: grid; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.site-profile-form input { min-height: 31px; padding: 5px 7px; font-size: 11px; }
+.lock-group-title { margin-top: 14px; color: var(--white); font-size: 12px; font-weight: 560; }
 .profile-empty, .selector-profile-hint { display: block; margin-top: 6px; color: var(--quiet); font-size: 9px; line-height: 1.4; }
 .save-profile-button { min-height: 28px; margin-top: 6px; padding: 4px 8px; font-size: 10px; }
 .pace-controls { display: grid; grid-template-columns: minmax(0, 1fr) 48px 18px; align-items: center; gap: 9px; margin-top: 5px; }
@@ -662,6 +669,14 @@ html.floating-window .floating-launch { display: none; }
 }
 .batch-progress-copy { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
 .batch-progress-copy strong { color: var(--white); font-variant-numeric: tabular-nums; }
+.batch-progress-copy { align-items: center; }
+.batch-progress-copy span { flex: 1 1 auto; min-width: 0; }
+.batch-progress-copy strong { flex: 0 0 auto; white-space: nowrap; }
+.batch-progress.has-error .batch-progress-copy span { color: var(--white); }
+.batch-resume { flex: 0 0 auto; min-height: 22px; padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: transparent; color: var(--white); cursor: pointer; font-size: 10px; }
+.batch-dismiss { display: inline-grid; flex: 0 0 auto; width: 22px; height: 22px; place-items: center; margin: -2px -4px -2px 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
+.batch-dismiss:hover, .batch-resume:hover { background: #ffffff14; color: var(--white); }
+.batch-dismiss:focus-visible, .batch-resume:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .batch-progress progress { width: 100%; height: 4px; accent-color: var(--accent); }
 html.dashboard-mode,
 html.dashboard-mode body { width: 100%; min-width: 0; height: 100%; min-height: 0; max-height: none; overflow: hidden; }
@@ -723,3 +738,41 @@ html.dashboard-mode #settingsView > .settings-card { margin: 0; padding: 16px; }
   html.dashboard-mode .product-card-body { padding: 0 10px 11px; }
   html.dashboard-mode .offer-list { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Caixa de confirmação compacta, alinhada ao texto. */
+.check-confirm { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 11px; line-height: 1.4; cursor: pointer; }
+.check-confirm:not(.hidden) { display: flex; }
+.check-confirm input[type="checkbox"] { appearance: none; display: inline-grid; flex: 0 0 15px; width: 15px; min-width: 15px; height: 15px; min-height: 15px; margin: 1px 0 0; padding: 0; place-items: center; border: 1px solid var(--line-strong); border-radius: 3px; background: #141414; cursor: pointer; }
+.check-confirm input[type="checkbox"]::after { content: ""; width: 7px; height: 4px; margin-top: -2px; border-bottom: 1.6px solid #0b0b0b; border-left: 1.6px solid #0b0b0b; opacity: 0; transform: rotate(-45deg); }
+.check-confirm input[type="checkbox"]:checked { border-color: var(--white); background: var(--white); }
+.check-confirm input[type="checkbox"]:checked::after { opacity: 1; }
+.check-confirm input[type="checkbox"]:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.check-confirm:hover span { color: var(--white); }
+
+/* Destaque breve da oferta aberta a partir de uma notificação. */
+.offer-accordion.focus-flash { animation: radar-focus-flash 1.8s ease-out; border-radius: 6px; }
+@keyframes radar-focus-flash { 0%, 35% { box-shadow: 0 0 0 1px var(--white), 0 0 0 4px #ffffff1c; } 100% { box-shadow: 0 0 0 1px transparent, 0 0 0 4px transparent; } }
+@media (prefers-reduced-motion: reduce) { .offer-accordion.focus-flash { animation: none; box-shadow: 0 0 0 1px var(--white); } }
+
+/* Diálogo próprio da extensão (substitui prompt/confirm do navegador). */
+.radar-dialog { width: min(340px, calc(100vw - 32px)); max-width: none; margin: auto; padding: 0; border: 1px solid var(--line-strong); border-radius: 8px; background: linear-gradient(180deg, #161616 0%, #0b0b0b 100%); color: var(--white); box-shadow: 0 18px 50px #000000b3; }
+.radar-dialog::backdrop { background: #000000a6; }
+.radar-dialog form { display: grid; gap: 10px; padding: 16px; }
+.radar-dialog-title { font-size: 14px; font-weight: 600; line-height: 1.35; letter-spacing: -.01em; }
+.radar-dialog-message { margin: -4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.radar-dialog-input { margin-top: 2px; font-variant-numeric: tabular-nums; }
+.radar-dialog-input:focus { border-color: var(--line-strong); }
+.radar-dialog-error { min-height: 0; color: #e7a8a8; font-size: 11px; }
+.radar-dialog-error:empty { display: none; }
+.radar-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.radar-dialog-actions button { min-height: 32px; padding: 6px 12px; }
+.radar-dialog-danger { min-height: 32px; padding: 6px 12px; border: 1px solid #e7a8a866; border-radius: 5px; background: #2a1414; color: #f3c9c9; font-size: 12px; font-weight: 570; }
+.radar-dialog-danger:hover { background: #3a1a1a; border-color: #e7a8a8aa; }
+@media (prefers-reduced-motion: no-preference) { .radar-dialog[open] { animation: radar-dialog-in .14s ease-out; } }
+@keyframes radar-dialog-in { from { opacity: 0; transform: translateY(4px) scale(.99); } to { opacity: 1; transform: none; } }
+.site-profile-row.lock-stale { border-color: #e7c98a55; }
+.site-profile-row.lock-stale .site-profile-meta { color: #e7d3a8; }
+
+/* Interruptor logo abaixo de outro: separa com respiro e uma linha fina. */
+.setting-toggle-follow { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.setting-field select:disabled { opacity: .45; cursor: not-allowed; }

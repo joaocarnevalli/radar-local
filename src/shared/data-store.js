@@ -16,10 +16,23 @@ var RadarData = (() => {
       return /^https?:$/.test(parsed.protocol) && !parsed.username && !parsed.password && parsed.href.length <= 8192 ? parsed.href : "";
     } catch { return ""; }
   }
-  function normalizedUrl(value) {
+  // Forma curta e estável do endereço de um produto (Amazon: /dp/ASIN). Outros sites ficam como estão.
+  function canonicalUrl(value) {
     const valid = url(value);
     if (!valid) return "";
     const parsed = new URL(valid);
+    if (/(^|\.)amazon\.[a-z.]+$/i.test(parsed.hostname)) {
+      const asin = parsed.pathname.match(/\/(?:dp|gp\/product|gp\/aw\/d|exec\/obidos\/asin)\/([A-Z0-9]{10})(?:[/?]|$)/i)?.[1];
+      if (asin) return `${parsed.origin}/dp/${asin.toUpperCase()}`;
+    }
+    return valid;
+  }
+  function normalizedUrl(value) {
+    const valid = canonicalUrl(value);
+    if (!valid) return "";
+    const parsed = new URL(valid);
+    const mercadoLivre = /(^|\.)mercadoli[vb]re\.com(?:\.[a-z]{2})?$/i.test(parsed.hostname) && parsed.pathname.match(/^\/(M[LC][A-Z])-?(\d{6,})/i);
+    if (mercadoLivre) return `https://produto.mercadolivre/${mercadoLivre[1].toUpperCase()}${mercadoLivre[2]}`;
     parsed.hash = "";
     [...parsed.searchParams.keys()].forEach(key => { if (/^(utm_.+|fbclid|gclid|mc_cid|mc_eid)$/i.test(key)) parsed.searchParams.delete(key); });
     parsed.searchParams.sort();
@@ -87,11 +100,19 @@ var RadarData = (() => {
         url: url(row.url), offerLabel: text(row.offerLabel, 80) || new URL(row.url).hostname, selector: text(row.selector, 1000),
         price: price(row.price), regularPrice: price(typeof row.regularPrice === "number" ? { amount: row.regularPrice } : row.regularPrice),
         regularPriceObservedAt: date(row.regularPriceObservedAt), history, alertsMuted: row.alertsMuted === true,
-        availability: ["in-stock", "out-of-stock"].includes(row.availability) ? row.availability : "unknown" };
+        availability: ["in-stock", "out-of-stock"].includes(row.availability) ? row.availability : "unknown",
+        // Itens antigos com estoque marcado à mão continuam manuais; os demais acompanham a leitura.
+        availabilityMode: row.availabilityMode === "manual" || (row.availabilityMode == null && ["in-stock", "out-of-stock"].includes(row.availability)) ? "manual" : "auto",
+        availabilityDetected: ["in-stock", "out-of-stock"].includes(row.availabilityDetected) ? row.availabilityDetected : "unknown" };
+      if (text(row.autoSelector, 1000).trim()) {
+        item.autoSelector = text(row.autoSelector, 1000).trim(); item.autoSelectorAt = date(row.autoSelectorAt);
+        const misses = Number(row.autoSelectorMisses);
+        if (Number.isInteger(misses) && misses > 0) item.autoSelectorMisses = Math.min(misses, 999);
+      }
       if (row.faviconUrl && url(row.faviconUrl) && new URL(row.faviconUrl).origin === new URL(row.url).origin) item.faviconUrl = url(row.faviconUrl);
       if (row.lastCheckError) { item.lastCheckError = text(row.lastCheckError, 500); item.lastCheckErrorAt = date(row.lastCheckErrorAt); }
       if (row.pendingPriceCandidate) {
-        item.pendingPriceCandidate = { ...price(row.pendingPriceCandidate), regularPrice: price(row.pendingPriceCandidate.regularPrice), reason: text(row.pendingPriceCandidate.reason || row.pendingPriceCandidate.reviewReason, 400), changePercent: Number.isFinite(row.pendingPriceCandidate.changePercent) ? row.pendingPriceCandidate.changePercent : null, direction: row.pendingPriceCandidate.direction === "drop" ? "drop" : "increase" };
+        item.pendingPriceCandidate = { ...price(row.pendingPriceCandidate), regularPrice: price(row.pendingPriceCandidate.regularPrice), reason: text(row.pendingPriceCandidate.reason || row.pendingPriceCandidate.reviewReason, 400), changePercent: Number.isFinite(row.pendingPriceCandidate.changePercent) ? row.pendingPriceCandidate.changePercent : null, direction: row.pendingPriceCandidate.direction === "drop" ? "drop" : "increase", locator: text(row.pendingPriceCandidate.locator, 1000) };
       }
       return item;
     });
@@ -155,7 +176,9 @@ var RadarData = (() => {
     const keys = Object.keys(values);
     const [total, replaced] = await Promise.all([chrome.storage.local.getBytesInUse(null), chrome.storage.local.getBytesInUse(keys)]);
     const bytes = new TextEncoder().encode(JSON.stringify(values)).length;
-    if (total - replaced + bytes > (chrome.storage.local.QUOTA_BYTES || 10485760) - 65536) throw new Error("Armazenamento local cheio. Exporte um backup e remova registros antigos antes de salvar. Os dados anteriores foram mantidos.");
+    // Com unlimitedStorage o navegador não impõe o teto de 10 MB; sem ele, a gravação é recusada antes de estourar.
+    const unlimited = Boolean(globalThis.chrome?.runtime?.getManifest?.().permissions?.includes("unlimitedStorage"));
+    if (!unlimited && total - replaced + bytes > (chrome.storage.local.QUOTA_BYTES || 10485760) - 65536) throw new Error("Armazenamento local cheio. Exporte um backup e remova registros antigos antes de salvar. Os dados anteriores foram mantidos.");
     await chrome.storage.local.set(values);
   }
   function locked(task) { return navigator.locks.request("radar-local-storage", task); }
@@ -211,6 +234,6 @@ var RadarData = (() => {
     }
     return targetObject;
   }
-  return { KEY, SETTINGS, normalize, price, url, normalizedUrl, icons, changes, apply, read, update, commit, write, saveSettings, replace, reconcile, equal, clone, pointKey };
+  return { KEY, SETTINGS, normalize, price, url, canonicalUrl, normalizedUrl, icons, changes, apply, read, update, commit, write, saveSettings, replace, reconcile, equal, clone, pointKey };
 })();
 if (typeof module !== "undefined") module.exports = RadarData;

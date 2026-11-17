@@ -2,8 +2,8 @@ const { test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const Money = require('../money.js');
-const Store = require('../data-store.js');
+const Money = require('../src/shared/money.js');
+const Store = require('../src/shared/data-store.js');
 let disk, tail, quota;
 const point = (amount, seconds = 0) => ({ amount, currency: 'BRL', checkedAt: new Date(1700000000000 + seconds * 1000).toISOString(), source: 'preço visível', confidence: 'high' });
 const fixture = () => Store.normalize({ folders: [], products: [{ id: 'p', name: 'Produto', target: 50 }], items: [{ id: 'i', productId: 'p', url: 'https://example.com/product', name: 'Produto', price: point(100), history: [point(100)] }] });
@@ -78,7 +78,7 @@ test('independent settings updates do not overwrite each other', async () => {
 });
 test('low-confidence readings and currency changes always require review', () => {
   const context = vm.createContext({ RadarMoney: Money });
-  vm.runInContext(fs.readFileSync(require.resolve('../price-extractor.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(require.resolve('../src/shared/price-extractor.js'), 'utf8'), context);
   assert.ok(context.priceReviewReason(point(100), { amount: 90, confidence: 'low' }, { priceAnomalyGuardEnabled: false }));
   assert.ok(context.priceReviewReason(point(100), { amount: 100, currency: 'USD', confidence: 'high' }));
   assert.equal(context.priceReviewReason(point(100), { amount: 90, currency: 'BRL', confidence: 'high' }), '');
@@ -86,7 +86,7 @@ test('low-confidence readings and currency changes always require review', () =>
 
 test('currency mismatch or unidentified currency cannot trigger a discount alert', () => {
   const context = vm.createContext({ RadarMoney: Money });
-  vm.runInContext(fs.readFileSync(require.resolve('../price-extractor.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(require.resolve('../src/shared/price-extractor.js'), 'utf8'), context);
   const item = fixture().items[0];
   for (const currency of ['USD', '']) assert.equal(context.evaluatePriceAlert(item, { amount: 10, currency }, { priceAlertNewLowEnabled: true }), null);
   assert.equal(context.evaluatePriceAlert(item, { amount: 10, currency: 'BRL' }).kind, 'target');
@@ -123,4 +123,38 @@ test('precision is stable and malformed product collections are rejected', () =>
   const raw = fixture(); raw.items[0].price.amount = 0.001;
   assert.throws(() => Store.normalize(raw));
   assert.throws(() => Store.normalize({ ...fixture(), products: 'invalid' }));
+});
+
+test('memorized price element survives normalization and can be cleared', () => {
+  const raw = fixture();
+  raw.items[0].autoSelector = '  #price .value  ';
+  raw.items[0].pendingPriceCandidate = { amount: 90, currency: 'BRL', confidence: 'high', checkedAt: new Date().toISOString(), locator: '.candidate' };
+  const clean = Store.normalize(raw);
+  assert.equal(clean.items[0].autoSelector, '#price .value');
+  raw.items[0].autoSelectorMisses = 3; assert.equal(Store.normalize(raw).items[0].autoSelectorMisses, 3);
+  raw.items[0].autoSelectorMisses = -1; assert.equal('autoSelectorMisses' in Store.normalize(raw).items[0], false);
+  assert.equal(clean.items[0].pendingPriceCandidate.locator, '.candidate');
+  delete raw.items[0].autoSelector;
+  assert.equal('autoSelector' in Store.normalize(raw).items[0], false);
+});
+
+test('canonical product URLs remove Amazon tracking and detect Mercado Livre duplicates', () => {
+  assert.equal(Store.canonicalUrl('https://www.amazon.com.br/Fone-JBL-Wave/dp/b0dhl63kwk/ref=sr_1_1?th=1&psc=1'), 'https://www.amazon.com.br/dp/B0DHL63KWK');
+  assert.equal(Store.canonicalUrl('https://www.amazon.com.br/gp/product/8550807567?pf_rd_r=x'), 'https://www.amazon.com.br/dp/8550807567');
+  assert.equal(Store.canonicalUrl('https://loja.example/produto?id=1'), 'https://loja.example/produto?id=1');
+  assert.equal(Store.normalizedUrl('https://produto.mercadolivre.com.br/MLB-1234567-mouse-_JM#position=1'), Store.normalizedUrl('https://produto.mercadolivre.com.br/MLB-1234567-outro-nome?searchVariation=2'));
+  assert.notEqual(Store.normalizedUrl('https://loja.example/a?id=1'), Store.normalizedUrl('https://loja.example/a?id=2'));
+});
+
+test('availability mode keeps manual marks and defaults new offers to automatic', () => {
+  const raw = fixture();
+  delete raw.items[0].availabilityMode; delete raw.items[0].availabilityDetected; // dados salvos por versões anteriores
+  raw.items[0].availability = 'out-of-stock';
+  assert.equal(Store.normalize(raw).items[0].availabilityMode, 'manual');
+  delete raw.items[0].availabilityMode;
+  raw.items[0].availability = 'unknown';
+  const auto = Store.normalize(raw).items[0];
+  assert.equal(auto.availabilityMode, 'auto'); assert.equal(auto.availabilityDetected, 'unknown');
+  raw.items[0].availabilityMode = 'auto'; raw.items[0].availability = 'in-stock'; raw.items[0].availabilityDetected = 'in-stock';
+  assert.equal(Store.normalize(raw).items[0].availabilityMode, 'auto');
 });

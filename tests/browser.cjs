@@ -1,46 +1,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const assert = require('node:assert/strict');
-const root = path.resolve(__dirname, '..');
-const binary = process.env.RADAR_BROWSER || ['C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(fs.existsSync);
-if (!binary) throw new Error('Set RADAR_BROWSER to a Chromium browser executable.');
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(fn, timeout = 30000) { const end = Date.now() + timeout; while (Date.now() < end) { const value = await fn(); if (value) return value; await sleep(100); } throw new Error('Timed out waiting for fixture'); }
-class CDP {
-  constructor(socket) { this.socket = socket; this.id = 0; this.calls = new Map(); this.errors = []; this.sessions = new Map(); socket.onmessage = event => { const data = JSON.parse(event.data); if (data.id) { const call = this.calls.get(data.id); if (!call) return; this.calls.delete(data.id); clearTimeout(call.timer); if (data.error) call.reject(new Error(JSON.stringify(data.error))); else call.resolve(data.result); } else if (data.method === 'Runtime.exceptionThrown') this.errors.push(data.params.exceptionDetails); else void this.event(data).catch(error=>this.errors.push({text:error.message})); }; }
-  send(method, params = {}, sessionId) { return new Promise((resolve, reject) => { const id = ++this.id; const timer = setTimeout(() => {this.calls.delete(id);reject(new Error('CDP timeout: '+method))},10000); this.calls.set(id, { resolve, reject, timer }); this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }); }
-  async event(data) {
-    if(data.method==='Target.attachedToTarget') {
-      const {sessionId,targetInfo}=data.params;
-      if(targetInfo.type==='page') {
-        await this.send('Runtime.enable',{},sessionId);
-        await this.send('Fetch.enable',{patterns:[{urlPattern:'https://radar.test/*'}]},sessionId);
-        this.sessions.set(targetInfo.targetId,sessionId);
-
-      }
-      await this.send('Runtime.runIfWaitingForDebugger',{},sessionId);
-      if(targetInfo.url.startsWith('https://radar.test/')) await this.send('Page.navigate',{url:targetInfo.url},sessionId);
-    }
-    if(data.method==='Fetch.requestPaused') await this.send('Fetch.fulfillRequest',{requestId:data.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body:Buffer.from(fixture(data.params.request.url)).toString('base64')},data.sessionId);
-  }
-  async attach(id) { return until(()=>this.sessions.get(id)); }
-  async evaluate(session, expression) { const result = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true }, session); if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text); return result.result.value; }
-  async page(url) { const { targetId } = await this.send('Target.createTarget', { url }); const session = await this.attach(targetId); await until(() => this.evaluate(session, 'document.readyState === "complete" && location.href === ' + JSON.stringify(url)).catch(() => false)); return { targetId, session }; }
-}
-
-fs.mkdirSync(path.join(root, '.test-artifacts'), {recursive:true});
-const workspace = fs.mkdtempSync(path.join(root, '.test-artifacts', 'radar-review-'));
-const extension = path.join(workspace, 'extension'), profile = path.join(workspace, 'profile');
-fs.mkdirSync(extension); fs.mkdirSync(profile);
-for (const name of fs.readdirSync(root)) if (/\.(?:js|html|css|json)$/.test(name)) fs.copyFileSync(path.join(root, name), path.join(extension, name));
-fs.cpSync(path.join(root, 'icons'), path.join(extension, 'icons'), { recursive: true });
-const manifest = JSON.parse(fs.readFileSync(path.join(extension, 'manifest.json')));
-manifest.host_permissions = ['https://radar.test/*'];
-fs.writeFileSync(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
-fs.writeFileSync(path.join(extension, 'test-driver.html'), '<!doctype html><html><head><title>Isolated test driver</title></head><body><script src="money.js"></script><script src="data-store.js"></script></body></html>');
+const { root, sleep, until, launch } = require('./harness.cjs');
 let observedPrice = 1899.90;
+const amazonPrice = (value, extra = '', offscreen = true) => { const [whole, cents] = value.split(','); return '<span class="a-price ' + extra + '"><span class="a-offscreen">' + (offscreen ? 'R$ ' + value : '') + '</span><span aria-hidden="true"><span class="a-price-symbol">R$</span><span class="a-price-whole">' + whole + '<span class="a-price-decimal">,</span></span><span class="a-price-fraction">' + cents + '</span></span></span>'; };
+function amazonFixture(route) {
+  const split = route === '/split';
+  const core = '<div id="corePriceDisplay_desktop_feature_div"><span class="savingsPercentage">-19%</span>' + amazonPrice(split ? '2.349,90' : '1.299,00', 'priceToPay', !split) +
+    '<span class="pricePerUnit">(' + amazonPrice('4,33') + ' / unidade)</span><div class="basisPrice">De: <span class="a-price a-text-price" data-a-strike="true"><span class="a-offscreen">R$ 1.599,00</span></span></div></div>';
+  const hiddenMobile = '<div id="corePriceDisplay_mobile_feature_div" style="display:none">' + amazonPrice('999,00', 'priceToPay') + '</div>';
+  const carousel = '<div class="a-carousel-container"><h2>Comprados juntos</h2>' + amazonPrice('49,90') + '</div>';
+  return '<!doctype html><html><head><title>Amazon.com.br: Fone</title></head><body><div id="centerCol"><h1 id="title"><span id="productTitle">Fone Bluetooth</span></h1><div id="availability"><span>Em estoque</span></div>' + core + hiddenMobile + '<div id="installments">em até 10x ' + amazonPrice('129,90') + '</div></div>' + carousel + '</body></html>';
+}
 function fixture(url) {
+  if (new URL(url).hostname === 'www.amazon.com.br') return amazonFixture(new URL(url).pathname);
   const route = new URL(url).pathname;
   let body = '<main><div class="product-info"><h1>Cadeira Premium</h1><s>R$ 2.990,90</s><span class="price-current">R$ ' + observedPrice.toFixed(2).replace('.', ',') + '</span><b>36% OFF</b></div></main>';
   if (route === '/empty') body = '<main><h1>Sem preço</h1><p>Loja indisponível</p></main>';
@@ -49,26 +22,22 @@ function fixture(url) {
   if (route === '/related') body = '<main><div class="product-info"><h1>Cadeira Premium</h1><span class="price-current">R$ 199,00</span></div><div class="recommend"><h2>Outro produto</h2><span class="price-pix">R$ 29,99 no Pix</span></div></main>';
   if (route === '/late') body = '<main><div class="product-info"><h1>Cadeira Premium</h1><span id="wait"></span></div></main><script>setTimeout(()=>{document.getElementById("wait").outerHTML=\'<span class="price-current">R$ 1888,00</span>\'},6500)</script>';
   if (route === '/conflict') body = '<main><div class="product-info"><h1>Produto</h1><span class="price-current">R$ 199,00</span><span class="price-current">R$ 299,00</span></div></main>';
+  if (route === '/locked') body = '<main><div class="product-info"><h1>Cadeira Premium</h1><span class="price-main">R$ 500,00</span><span class="price-current">R$ 450,00</span></div></main>';
+  if (route === '/dup') body = '<main><div class="product-info"><h1>Cadeira Premium</h1><span class="p">R$ 10,00</span><div style="display:none"><span class="p">R$ 99,00</span></div></div></main>';
+  if (route === '/numberflow') body = '<script>customElements.define("number-flow-react",class extends HTMLElement{constructor(){super();this.attachShadow({mode:"open"}).innerHTML="<span>R$ 75,99</span>"}})</script><main><div class="grid"><div><h1>Mouse sem fio Logitech M280</h1></div><div class="flex w-full"><span class="text-xs line-through">R$ 111,75</span><p class="flex"><number-flow-react class="text-2xl leading-tight" data="{&quot;valueAsString&quot;:&quot;R$ 75,99&quot;,&quot;value&quot;:75.99}"></number-flow-react><span>-15% à vista no PIX</span></p><p>3x R$ 29,80 s/ juros</p></div></div><div class="swiper"><div class="swiper-slide"><p class="price-card">R$ 189,90 no Pix</p></div></div></main><script type="application/ld+json">{"@type":"Product","name":"Mouse sem fio Logitech M280","offers":{"price":75.99,"priceCurrency":"BRL"}}</script>';
+  if (route === '/showcase') { const card = (value, marked) => '<div ' + (marked ? 'data-testid="product-card"' : 'class="tile"') + '><div data-testid="price-default"><p data-testid="price-value"><span id="price-final-label-:R' + value.replace(',', '') + 'ml6:" class="sr-only">Preço R$ ' + value + '</span>R$ ' + value + ' no Pix</p></div></div>'; body = '<div id="product"><section><h1 data-testid="heading">Mouse sem fio Logitech M280</h1></section><aside><div data-testid="product-price"><div data-testid="price-default"><p data-testid="price-value"><span id="price-final-label-:R6a62ml6:" class="sr-only">Preço R$ 75,99</span>R$ 75,99 no Pix</p><span data-testid="price-installment">ou R$ 89,40 em 1x sem juros</span></div></div></aside></div><div style="height:2200px"></div>' + card('57,90', true) + card('52,11', false); }
+  if (route === '/soldout') body = '<main><h1>Cadeira Premium</h1><p>Produto esgotado. Avise-me quando chegar.</p></main><script type="application/ld+json">{"@type":"Product","name":"Cadeira Premium","offers":{"availability":"https://schema.org/OutOfStock","priceCurrency":"BRL"}}</script>';
   if (route === '/json') body = '<main><h1>Cadeira Premium</h1></main><script type="application/ld+json">{"@type":"Product","name":"Cadeira Premium","offers":{"price":199.9,"priceCurrency":"BRL"}}</script>';
   return '<!doctype html><html><head><title>Cadeira Premium</title></head><body>' + body + '</body></html>';
 }
-let child, cdp;
+let child, cdp, workspace;
 (async () => {
   const base = 'https://radar.test';
-  child = spawn(binary, ['--headless=new', '--disable-gpu', '--disable-crash-reporter', '--disable-breakpad', '--disable-crashpad', '--noerrdialogs', '--no-sandbox', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', '--disable-sync', '--remote-debugging-pipe', '--user-data-dir=' + profile, '--disable-extensions-except=' + extension, '--load-extension=' + extension, 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
-  let stderr = ''; child.stderr.on('data', chunk => { stderr += chunk; });
-  const socket = {send: value=>child.stdio[3].write(value+'\0'), close() {}};
-  let pending = '';
-  child.stdio[4].on('data', chunk=> { pending += chunk.toString(); let end; while((end=pending.indexOf('\0'))>=0) { const value=pending.slice(0,end);pending=pending.slice(end+1);if(value) socket.onmessage({data:value}); }});
-  cdp = new CDP(socket);
-  await cdp.send('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true});
-  const worker = await until(async () => (await cdp.send('Target.getTargets')).targetInfos.find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
-  const extensionOrigin = worker.url.replace('/background.js', '');
-  const driver = await cdp.page(extensionOrigin + '/test-driver.html');
-  const workerSession = driver.session;
+  let extensionOrigin, workerSession;
+  ({ cdp, child, workspace, extensionOrigin, workerSession } = await launch({ origins: ['https://radar.test', 'https://www.amazon.com.br'], fixture }));
   assert.equal(await cdp.evaluate(workerSession, 'typeof chrome'), 'object');
   assert.equal((await cdp.evaluate(workerSession, 'RadarData.read()')).items.length, 0);
-  const script = fs.readFileSync(path.join(root, 'money.js'), 'utf8') + '\n' + fs.readFileSync(path.join(root, 'price-extractor.js'), 'utf8');
+  const script = fs.readFileSync(path.join(root, 'src/shared/money.js'), 'utf8') + '\n' + fs.readFileSync(path.join(root, 'src/shared/price-extractor.js'), 'utf8');
   for (const [route, expected, review] of [['/product',1899.9,false], ['/related',199,false], ['/text',1800,true], ['/ambiguous',null,false], ['/json',199.9,true], ['/conflict',199,true]]) {
     const page = await cdp.page(base + route);
     await cdp.evaluate(page.session, script);
@@ -81,9 +50,34 @@ let child, cdp;
     await cdp.send('Target.closeTarget', { targetId: page.targetId });
   }
   console.log('PASS: product amount, discount/related-price exclusion, ambiguous and low-confidence text');
+  const run = async (url, expression) => { const page = await cdp.page(url); await cdp.evaluate(page.session, script); const value = await cdp.evaluate(page.session, expression); await cdp.send('Target.closeTarget', { targetId: page.targetId }); return value; };
+  const amazon = await run('https://www.amazon.com.br/dp/B000TEST', 'extractPageInfo("")');
+  assert.equal(amazon.price.amount, 1299); assert.equal(amazon.price.currency, 'BRL'); assert.equal(amazon.price.source, 'regra da loja');
+  assert.ok(!amazon.price.requiresReview); assert.equal(amazon.regularPrice.amount, 1599);
+  assert.equal(amazon.locator, '#corePriceDisplay_desktop_feature_div .priceToPay');
+  assert.equal(amazon.availability, 'in-stock');
+  const soldout = await run(base + '/soldout', 'extractPageInfo("")');
+  assert.equal(soldout.price, null); assert.equal(soldout.availability, 'out-of-stock');
+  assert.equal((await run('https://www.amazon.com.br/split', 'extractPageInfo("")')).price.amount, 2349.9);
+  assert.equal((await run('https://www.amazon.com.br/dp/B000TEST', 'extractPageInfo(".priceToPay")')).price.amount, 1299);
+  console.log('PASS: Amazon rule ignores hidden copies, list price, unit price, installments and carousels');
+  const learned = await run(base + '/product', '(()=>{const first=extractPageInfo("");const again=extractPageInfo("",{lockedSelector:first.locator});return {first,again}})()');
+  assert.ok(learned.first.locator); assert.equal(learned.again.price.source, 'elemento memorizado'); assert.equal(learned.again.price.amount, 1899.9);
+  const locked = await run(base + '/locked', '({hit:extractPageInfo("",{lockedSelector:".price-main"}),miss:extractPageInfo("",{lockedSelector:".gone"}),plain:extractPageInfo("")})');
+  assert.equal(locked.plain.price.amount, 450); assert.equal(locked.hit.price.amount, 500); assert.equal(locked.hit.locator, '.price-main');
+  assert.equal(locked.miss.price.amount, 450); assert.equal(locked.miss.lockMissed, true);
+  assert.equal((await run(base + '/dup', 'extractPageInfo(".p")')).price.amount, 10);
+  console.log('PASS: memorized element wins, falls back when missing and ignores hidden duplicates');
+  const flow = await run(base + '/numberflow', '(()=>{const r=extractPageInfo("");return {r,again:r.locator&&extractPageInfo("",{lockedSelector:r.locator}).price}})()');
+  assert.equal(flow.r.price.amount, 75.99); assert.equal(flow.r.price.source, 'preço Pix visível'); assert.ok(!flow.r.price.requiresReview);
+  assert.equal(flow.again.amount, 75.99);
+  const showcase = await run(base + '/showcase', '(()=>{const r=extractPageInfo("");return {r,again:r.locator&&extractPageInfo("",{lockedSelector:r.locator}).price}})()');
+  assert.equal(showcase.r.price.amount, 75.99); assert.ok(!showcase.r.price.requiresReview, JSON.stringify(showcase.r.price));
+  assert.ok(showcase.r.locator && !/:R|ml6/.test(showcase.r.locator), showcase.r.locator); assert.equal(showcase.again.amount, 75.99);
+  console.log('PASS: NumberFlow prices, showcase recommendations and unstable React ids');
   const source = await cdp.page(base + '/product');
   const sourceTab = await cdp.evaluate(workerSession, '(async()=>{const tabs=await chrome.tabs.query({});return tabs.find(t=>t.url===' + JSON.stringify(base + '/product') + ').id})()');
-  const ui = await cdp.page(extensionOrigin + '/popup.html?dashboard=1&sourceTab=' + sourceTab);
+  const ui = await cdp.page(extensionOrigin + '/src/popup/popup.html?dashboard=1&sourceTab=' + sourceTab);
 
   await until(() => cdp.evaluate(ui.session, 'typeof dataBaseline !== "undefined" && currentPage?.price?.amount === 1899.9')).catch(async error => { console.log('UI state:', await cdp.evaluate(ui.session, '({page:currentPage, baseline:dataBaseline,text:document.body.innerText.slice(0,1800)})'), cdp.errors); throw error; });
   const pageAccess = await cdp.evaluate(ui.session, 'chrome.scripting.executeScript({target:{tabId:' + sourceTab + '},func:async()=>{let storage=false;try{await chrome.storage.local.get("radarLocalData");storage=true;}catch{}let command;try{command=await chrome.runtime.sendMessage({type:"radar:refresh",ids:["fake"]});}catch{}return {storage,command:command?.ok??null}}})');
@@ -93,7 +87,7 @@ let child, cdp;
   await cdp.evaluate(ui.session, 'onCaptureClick()');
   await cdp.evaluate(ui.session, 'saveCurrentPage()');
   assert.equal(await cdp.evaluate(ui.session, 'data.items.length'), 1);
-  const other = await cdp.page(extensionOrigin + '/popup.html?dashboard=1&sourceTab=' + sourceTab);
+  const other = await cdp.page(extensionOrigin + '/src/popup/popup.html?dashboard=1&sourceTab=' + sourceTab);
   await until(() => cdp.evaluate(other.session, 'typeof dataBaseline !== "undefined" && data.items.length === 1'));
   await Promise.all([
     cdp.evaluate(ui.session, 'data.items[0].offerLabel="Loja editada"; persist()'),
@@ -101,18 +95,28 @@ let child, cdp;
   ]);
   const saved = await cdp.evaluate(workerSession, 'RadarData.read()');
   assert.equal(saved.items[0].offerLabel, 'Loja editada'); assert.equal(saved.items[0].alertsMuted, true);
+  assert.ok(saved.items[0].autoSelector, 'confirmed capture memorizes the price element');
   console.log('PASS: UI capture, source tab in dashboard mode, concurrent writes from separate windows');
+  const picker = await cdp.evaluate(ui.session, 'chrome.runtime.sendMessage({type:"radar:start-picker",tabId:' + sourceTab + '})');
+  assert.equal(picker.ok, true, JSON.stringify(picker));
+  await cdp.evaluate(source.session, '(()=>{const r=document.querySelector(".price-current").getBoundingClientRect();const x=r.left+r.width/2,y=r.top+r.height/2;dispatchEvent(new MouseEvent("mousemove",{clientX:x,clientY:y,bubbles:true}));document.elementFromPoint(x,y).dispatchEvent(new MouseEvent("click",{clientX:x,clientY:y,bubbles:true,cancelable:true}))})()');
+  const profileSaved = await until(async () => (await cdp.evaluate(workerSession, 'RadarData.read()')).siteProfiles.find(p => p.host === 'radar.test'));
+  assert.equal(profileSaved.selector, 'span.price-current');
+  const forged = await cdp.evaluate(ui.session, 'chrome.scripting.executeScript({target:{tabId:' + sourceTab + '},func:async()=>{try{return await chrome.runtime.sendMessage({type:"radar:picker-result",token:"x",locator:"body"})}catch{return {ok:false}}}})');
+  assert.equal(forged[0].result?.ok, false);
+  await cdp.evaluate(workerSession, 'RadarData.update(data=>{data.siteProfiles=[]})');
+  console.log('PASS: visual picker locks the clicked price for the site; forged results are rejected');
   const token = '12345678-1234-1234-1234-123456789abc';
   await cdp.evaluate(workerSession, 'chrome.storage.local.set({' + JSON.stringify('radarCapture:' + token) + ':{url:' + JSON.stringify(base+'/manual') + ',selectionText:"R$ 1.899",title:"Manual",createdAt:Date.now()}})');
-  const capture = await cdp.page(extensionOrigin + '/quick-capture.html?capture=' + token);
+  const capture = await cdp.page(extensionOrigin + '/src/capture/quick-capture.html?capture=' + token);
   await until(() => cdp.evaluate(capture.session, '!document.getElementById("captureForm").classList.contains("hidden")'));
   assert.equal(await cdp.evaluate(capture.session, 'document.getElementById("captureAmount").value'), '1.899,00');
   await cdp.evaluate(capture.session, 'saveSelection({preventDefault(){}})');
   const manual = await cdp.evaluate(workerSession, 'RadarData.read()'); assert.equal(manual.items.find(i=>i.url.endsWith('/manual')).price.amount, 1899); assert.equal(manual.items.find(i=>i.url.endsWith('/manual')).price.currency,'BRL');
   console.log('PASS: selected-price flow preserves thousands and currency');
-  await cdp.evaluate(workerSession, 'RadarData.update(data=>{const sample=data.items.find(i=>i.url.endsWith("/product"));for(const route of ["late","empty","text"]){data.items.push({...structuredClone(sample),id:route,url:' + JSON.stringify(base) + '+"/"+route,history:[...sample.history]})}})');
+  await cdp.evaluate(workerSession, 'RadarData.update(data=>{const sample=data.items.find(i=>i.url.endsWith("/product"));for(const route of ["late","empty","text","soldout"]){data.items.push({...structuredClone(sample),id:route,url:' + JSON.stringify(base) + '+"/"+route,history:[...sample.history]})}})');
   observedPrice = 1850;
-  const queueReply = await cdp.evaluate(other.session, 'chrome.runtime.sendMessage({type:"radar:refresh",ids:[' + JSON.stringify(saved.items[0].id) + ',"late","empty","text"]})');
+  const queueReply = await cdp.evaluate(other.session, 'chrome.runtime.sendMessage({type:"radar:refresh",ids:[' + JSON.stringify(saved.items[0].id) + ',"late","empty","text","soldout"]})');
   assert.equal(queueReply.ok, true);
   await cdp.send('Target.closeTarget', { targetId: other.targetId });
   await cdp.send('Target.closeTarget', { targetId: ui.targetId });
@@ -125,8 +129,11 @@ let child, cdp;
   assert.ok(result.items.find(i=>i.id==='empty').lastCheckError);
   assert.equal(result.items.find(i=>i.id==='text').price.amount,1899.9);
   assert.equal(result.items.find(i=>i.id==='text').pendingPriceCandidate.amount,1800);
+  const soldoutItem = result.items.find(i=>i.id==='soldout');
+  assert.equal(soldoutItem.availability, 'out-of-stock'); assert.equal(soldoutItem.availabilityDetected, 'out-of-stock');
+  assert.equal(soldoutItem.price.amount, 1899.9); assert.ok(!soldoutItem.lastCheckError);
   console.log('PASS: queue survives closing UI, waits for late price, preserves last price on failure and requires review');
-  const finalUi = await cdp.page(extensionOrigin + '/popup.html');
+  const finalUi = await cdp.page(extensionOrigin + '/src/popup/popup.html');
   await until(()=>cdp.evaluate(finalUi.session,'Boolean(dataBaseline)'));
   await cdp.evaluate(finalUi.session,'chrome.runtime.sendMessage({type:"radar:refresh",ids:["late","empty"]})');
   await cdp.evaluate(finalUi.session,'chrome.runtime.sendMessage({type:"radar:queue-control",action:"pause"})');
@@ -135,12 +142,35 @@ let child, cdp;
   await sleep(8000);
   assert.equal(await cdp.evaluate(workerSession,'(async()=> Boolean((await chrome.storage.local.get("radarLocalAutoQueue")).radarLocalAutoQueue))()'),false);
   console.log('PASS: paused/cancelled queue is not resurrected by an in-flight reading');
+  await cdp.evaluate(finalUi.session,'settings.periodicRefreshEnabled=true; settings.periodicRefreshHours=6; persistSettings()');
+  const periodic = await until(()=>cdp.evaluate(workerSession,'chrome.alarms.get("radar-local-periodic-refresh")'));
+  assert.equal(periodic.periodInMinutes, 360);
+  await cdp.evaluate(finalUi.session,'settings.periodicRefreshEnabled=false; persistSettings()');
+  await until(async()=>!(await cdp.evaluate(workerSession,'chrome.alarms.get("radar-local-periodic-refresh")')));
+  const focusId = result.items.find(i=>i.id==='late').id;
+  const focused = await cdp.page(extensionOrigin + '/src/popup/popup.html?focusItem=' + focusId);
+  await until(()=>cdp.evaluate(focused.session,'Boolean(document.querySelector(\'[data-item-id="' + focusId + '"]\')?.open)'));
+  await cdp.send('Target.closeTarget', { targetId: focused.targetId });
+  console.log('PASS: periodic refresh alarm follows settings; notification focus opens the offer');
+  const dialogs = await cdp.evaluate(finalUi.session, `(async()=>{
+    const pending = radarPrompt("Corrigir preço atual", { value: "10", validate: text => parseUserPrice(text) ? "" : "Informe um preço válido." });
+    const dialog = document.querySelector("dialog.radar-dialog"), field = dialog.querySelector("input"), form = dialog.querySelector("form");
+    field.value = "abc"; form.requestSubmit(); const error = dialog.querySelector(".radar-dialog-error").textContent; const stillOpen = dialog.open;
+    field.value = "1.899,90"; form.requestSubmit(); const value = await pending;
+    const confirmation = radarConfirm("Os produtos ficam em Sem pasta.", { title: "Apagar a pasta?", danger: true });
+    document.querySelector("dialog.radar-dialog").dispatchEvent(new Event("cancel", { cancelable: true }));
+    const accepted = radarConfirm("Ok?"); document.querySelector("dialog.radar-dialog form").requestSubmit();
+    return { error, stillOpen, value, cancelled: await confirmation, accepted: await accepted, left: document.querySelectorAll("dialog.radar-dialog").length };
+  })()`);
+  assert.equal(dialogs.error, 'Informe um preço válido.'); assert.equal(dialogs.stillOpen, true); assert.equal(dialogs.value, '1.899,90');
+  assert.equal(dialogs.cancelled, false); assert.equal(dialogs.accepted, true); assert.equal(dialogs.left, 0);
+  console.log('PASS: in-app dialogs validate input, cancel with Escape and clean up');
   await cdp.evaluate(finalUi.session,'for(const p of data.products) expandedProducts.add(p.id); for(const i of data.items) expandedOffers.add(i.id); renderItems()');
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:392,height:600,deviceScaleFactor:1,mobile:false},finalUi.session);
   await sleep(300);
   assert.equal(await cdp.evaluate(finalUi.session,'document.documentElement.scrollWidth <= innerWidth'),true,'popup horizontal overflow');
   fs.writeFileSync(path.join(workspace,'popup.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{},finalUi.session)).data,'base64'));
-  const dashboard = await cdp.page(extensionOrigin + '/dashboard.html?sourceTab=' + sourceTab);
+  const dashboard = await cdp.page(extensionOrigin + '/src/dashboard/dashboard.html?sourceTab=' + sourceTab);
   await until(()=>cdp.evaluate(dashboard.session,'document.getElementById("radarApp").contentDocument?.getElementById("itemsSummary")?.textContent.includes("produtos")'));
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false},dashboard.session);
   await sleep(300);
@@ -148,7 +178,7 @@ let child, cdp;
   fs.writeFileSync(path.join(workspace,'dashboard.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{},dashboard.session)).data,'base64'));
   console.log('PASS: popup and dashboard render without horizontal overflow');
   await cdp.evaluate(workerSession,'chrome.storage.local.set({radarLocalData:{folders:"invalid",items:[]}})');
-  const recovery = await cdp.page(extensionOrigin + '/popup.html');
+  const recovery = await cdp.page(extensionOrigin + '/src/popup/popup.html');
   await until(()=>cdp.evaluate(recovery.session,'document.body.innerText.includes("Exportar dados originais")'));
   assert.equal(await cdp.evaluate(workerSession,'(async()=> (await chrome.storage.local.get("radarLocalData")).radarLocalData.folders)()'),'invalid');
   console.log('PASS: corrupt data is preserved and recovery is offered');
@@ -157,6 +187,6 @@ let child, cdp;
 })().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
   if (cdp) { await cdp.send('Browser.close').catch(()=>{}); cdp.socket.close(); }
   if (child && child.exitCode == null) child.kill();
-
+  if (!workspace) return;
   console.log('Isolated test profile:', workspace);
 });

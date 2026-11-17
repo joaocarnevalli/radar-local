@@ -1,13 +1,13 @@
-# Kit de publicação — Radar Local 0.2.0
+# Kit de publicação — Radar Local 0.3.0
 
-Preparado em 15/11/2026. O pacote foi criado localmente; nada foi enviado ao GitHub ou ao Google nesta etapa.
+Preparado em 16/11/2026. O pacote foi criado localmente; nada foi enviado ao GitHub ou ao Google nesta etapa.
 
 ## Arquivos
 
 | Arquivo | Onde usar |
 | --- | --- |
-| `../dist/radar-local-0.2.0-chrome-web-store.zip` | Upload em “Adicionar novo item” no Developer Dashboard. |
-| `../dist/radar-local-0.2.0-chrome-web-store.zip.sha256` | Conferência de integridade do ZIP. Não é necessário enviar ao Google. |
+| `../dist/radar-local-0.3.0-chrome-web-store.zip` | Upload em “Adicionar novo item” no Developer Dashboard. |
+| `../dist/radar-local-0.3.0-chrome-web-store.zip.sha256` | Conferência de integridade do ZIP. Não é necessário enviar ao Google. |
 | `listing-pt-BR.txt` | Nome, resumo, descrição, categoria e idioma da ficha da loja. |
 | `privacy-fields.md` | Finalidade única, justificativas de permissões e declarações de uso de dados. |
 | `reviewer-instructions.txt` | Instruções de teste para o revisor do Google, em inglês. |
@@ -20,7 +20,7 @@ Preparado em 15/11/2026. O pacote foi criado localmente; nada foi enviado ao Git
 
 As capturas são da interface real, em 1280×800, com produtos, lojas, valores e endereços `.example` fictícios. Não são preços ou promoções verificados. Os dados de demonstração e os scripts de teste não entram no ZIP. As imagens promocionais opcionais (440×280 e 1400×560) não são exigidas para a submissão e não fazem parte deste kit.
 
-O ZIP usa uma lista explícita de 24 arquivos de execução, ícones, licença e política. Não inclui `.git`, testes, scripts de geração, este kit, perfis temporários ou backups do usuário. O `manifest.json` fica na raiz. A pasta `dist/` é ignorada pelo Git e pode ser recriada a qualquer momento.
+O ZIP usa uma lista explícita de 35 arquivos de execução, ícones, licença e política. Não inclui `.git`, testes, ferramentas de geração, este kit, perfis temporários ou backups do usuário. O `manifest.json` fica na raiz. A pasta `dist/` é ignorada pelo Git e pode ser recriada a qualquer momento.
 
 ## 1. Publicar os arquivos de suporte no GitHub
 
@@ -29,13 +29,13 @@ Use um terminal PowerShell. Execute na ordem abaixo, começando por mudar de pas
 ```powershell
 Set-Location 'C:\Users\joaos\Documents\Codex\2026-11-09\cah\radar-local'
 git status
-git add README.md manifest.json background.js dashboard.js offscreen.js popup.html popup.js price-extractor.js quick-capture.html quick-capture.js data-store.js money.js .gitignore CHANGELOG.md SECURITY.md PRIVACY.md tests scripts store
+git add README.md manifest.json .gitignore CHANGELOG.md SECURITY.md PRIVACY.md src assets tests tools store .github
 git diff --cached --stat
-git commit -m "Prepare Radar Local 0.2.0 and Chrome Web Store publication kit"
+git commit -m "Prepare Radar Local 0.3.0 and Chrome Web Store publication kit"
 git push origin main
 ```
 
-Os arquivos da revisão anterior também estão nessa lista porque o pacote 0.2.0 usa essas correções. Se houver conflito no push, resolva-o antes de continuar; não use force push para contornar.
+Os arquivos da revisão anterior também estão nessa lista porque o pacote 0.3.0 usa essas correções. Se houver conflito no push, resolva-o antes de continuar; não use force push para contornar.
 
 Depois do envio, abra em uma janela sem login e confira:
 
@@ -66,12 +66,14 @@ Para futuras atualizações da loja, aumente a versão no manifest, gere outro Z
 
 ```powershell
 Set-Location 'C:\Users\joaos\Documents\Codex\2026-11-09\cah\radar-local'
+node tools/check-files.cjs
 node --test tests/data.test.cjs
-node scripts/store-assets.cjs
-.\scripts\package.ps1
+node tests/browser.cjs
+node tools/store-assets.cjs
+.\tools\package.ps1
 ```
 
-O gerador de imagens abre um Brave/Edge isolado com dados fictícios e salva um perfil em `.test-artifacts/`, sem tocar no perfil pessoal. Assim como o teste de integração, usa o sandbox interno desativado apenas para as páginas controladas. Nunca use esse perfil para navegação pessoal. Nenhuma opção de teste é incorporada ao pacote distribuído.
+O gerador de imagens abre um Brave, Chrome ou Edge isolado com dados fictícios e salva um perfil em `.test-artifacts/`, sem tocar no perfil pessoal. Assim como o teste de integração, usa o sandbox interno desativado apenas para as páginas controladas. Nunca use esse perfil para navegação pessoal. Nenhuma opção de teste é incorporada ao pacote distribuído.
 
 ## Fontes oficiais consultadas
 

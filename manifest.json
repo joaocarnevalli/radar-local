@@ -1,29 +1,29 @@
 {
   "manifest_version": 3,
   "name": "Radar Local",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minimum_chrome_version": "120",
   "description": "Monitoramento local de preços com pastas personalizadas e histórico.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage", "tabs", "alarms"],
   "optional_permissions": ["notifications", "offscreen", "contextMenus"],
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'" },
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "icons": {
-    "16": "icons/icon-16.png",
-    "32": "icons/icon-32.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
   },
   "action": {
     "default_title": "Radar Local",
-    "default_popup": "popup.html",
+    "default_popup": "src/popup/popup.html",
     "default_icon": {
-      "16": "icons/icon-16.png",
-      "32": "icons/icon-32.png",
-      "48": "icons/icon-48.png"
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png"
     }
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/service-worker.js"
   }
 }

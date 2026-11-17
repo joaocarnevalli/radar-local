@@ -1,6 +1,6 @@
 # Campos para o Developer Dashboard
 
-Textos de preenchimento para a versão 0.2.0. As URLs abaixo devem estar públicas e acessíveis antes de enviar para análise. Não marque “nenhum dado” apenas porque o processamento é local: a documentação do Google exige divulgar o tratamento local.
+Textos de preenchimento para a versão 0.3.0. As URLs abaixo devem estar públicas e acessíveis antes de enviar para análise. Não marque “nenhum dado” apenas porque o processamento é local: a documentação do Google exige divulgar o tratamento local.
 
 ## Single purpose
 
@@ -13,6 +13,7 @@ Monitor prices on product pages explicitly selected by the user, organize those 
 | activeTab | Provides temporary access to the active page when the user invokes the extension to capture a product URL, title and price. It is not used to record general browsing activity. |
 | scripting | Runs the bundled price extractor in the isolated world of a user-selected page or an explicitly monitored offer. Scripts are packaged with the extension; no remote scripts are loaded by the extension. |
 | storage | Stores products, monitored URLs, folders, price history, user preferences, reading profiles and the persistent refresh queue in the local browser profile. No Radar backend receives these records. |
+| unlimitedStorage | Removes the default 10 MB cap of chrome.storage.local so long price histories for many offers are not rejected. Data stays in the local browser profile; nothing is uploaded. |
 | tabs | Reads source-tab URL/title information when capturing from the dashboard or floating window and checks the URL, redirect origin and loading status of tabs created for monitored offers. It does not retain a general browsing history. |
 | alarms | Schedules sequential refreshes and resumes the persisted queue when the Manifest V3 worker is suspended. It does not monitor prices while the browser is closed. |
 | Optional host permissions: http://*/* and https://*/* | Users can monitor product pages on different websites. Host access is requested at runtime for the specific origins selected for capture/refresh, not granted to all sites at installation. It allows the bundled extractor to read those pages and fetch small same-origin favicons. Startup checks only use previously granted origins. |

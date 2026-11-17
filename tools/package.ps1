@@ -2,12 +2,15 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $manifest = Get-Content -LiteralPath (Join-Path $projectRoot 'manifest.json') -Raw | ConvertFrom-Json
 $files = @(
-  'manifest.json', 'background.js', 'money.js', 'data-store.js', 'price-extractor.js',
-  'popup.html', 'popup.css', 'popup.js', 'ui-mode.js',
-  'dashboard.html', 'dashboard.css', 'dashboard.js',
-  'quick-capture.html', 'quick-capture.css', 'quick-capture.js',
-  'offscreen.html', 'offscreen.js', 'LICENSE', 'PRIVACY.md',
-  'icons/icon-16.png', 'icons/icon-32.png', 'icons/icon-48.png', 'icons/icon-128.png', 'icons/radar.svg'
+  'manifest.json', 'LICENSE', 'PRIVACY.md',
+  'src/background/service-worker.js',
+  'src/shared/money.js', 'src/shared/data-store.js', 'src/shared/price-extractor.js', 'src/shared/ui-mode.js',
+  'src/popup/popup.html', 'src/popup/popup.css', 'src/popup/popup.js',
+  'src/popup/format.js', 'src/popup/item-state.js', 'src/popup/settings.js', 'src/popup/capture.js', 'src/popup/folders.js', 'src/popup/products.js', 'src/popup/offers.js', 'src/popup/refresh.js', 'src/popup/site-locks.js', 'src/popup/backup.js', 'src/popup/dialogs.js',
+  'src/dashboard/dashboard.html', 'src/dashboard/dashboard.css', 'src/dashboard/dashboard.js',
+  'src/capture/quick-capture.html', 'src/capture/quick-capture.css', 'src/capture/quick-capture.js',
+  'src/offscreen/offscreen.html', 'src/offscreen/offscreen.js',
+  'assets/icons/icon-16.png', 'assets/icons/icon-32.png', 'assets/icons/icon-48.png', 'assets/icons/icon-128.png', 'assets/icons/radar.svg'
 )
 $outputDirectory = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null

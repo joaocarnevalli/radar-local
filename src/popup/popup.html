@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Radar Local</title>
-  <script src="ui-mode.js"></script>
+  <script src="../shared/ui-mode.js"></script>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div class="app-shell">
   <header class="topbar">
     <div class="brand-lockup">
-      <span class="brand-mark" aria-hidden="true"><img src="icons/radar.svg" alt=""></span>
+      <span class="brand-mark" aria-hidden="true"><img src="../../assets/icons/radar.svg" alt=""></span>
       <div class="brand-copy">
         <div class="brand">Radar <span class="brand-local">Local</span></div>
         <div class="privacy">Preços e histórico armazenados localmente</div>
@@ -43,7 +43,7 @@
           </div>
           <label>Pasta<select id="itemFolder"></select></label>
           <label>Seletor CSS (opcional)<input id="itemSelector" placeholder="Ex.: [itemprop='price']"></label>
-          <label id="captureReview" class="hidden"><input id="captureReviewConfirmed" type="checkbox">Conferi este preço no site, incluindo variante e forma de pagamento.</label>
+          <label id="captureReview" class="check-confirm hidden"><input id="captureReviewConfirmed" type="checkbox"><span>Conferi este preço no site, incluindo variante e forma de pagamento.</span></label>
           <div class="row-actions">
             <button id="saveItem" class="primary">Salvar</button>
             <button id="cancelAdd" class="secondary">Cancelar</button>
@@ -82,7 +82,7 @@
         </select>
       </div>
       <section id="batchProgress" class="batch-progress hidden" role="status" aria-live="polite">
-        <div class="batch-progress-copy"><span id="batchProgressText">Preparando atualização…</span><strong id="batchProgressCount">0 / 0</strong></div>
+        <div class="batch-progress-copy"><span id="batchProgressText">Preparando atualização…</span><strong id="batchProgressCount">0 / 0</strong><button id="batchResume" class="batch-resume hidden" type="button">Retomar</button><button id="batchDismiss" class="batch-dismiss hidden" type="button" aria-label="Fechar aviso" title="Fechar aviso">×</button></div>
         <progress id="batchProgressBar" max="1" value="0" aria-label="Progresso da atualização em lote"></progress>
       </section>
       <form id="newProductForm" class="new-product-form hidden">
@@ -129,6 +129,15 @@
           <span><strong>Atualizar ao iniciar o navegador</strong><small>Inicia uma fila de itens desatualizados quando o Chrome ou Brave é iniciado.</small></span>
           <input id="startupRefreshEnabled" type="checkbox">
         </label>
+        <label class="setting-toggle setting-toggle-follow">
+          <span><strong>Verificar periodicamente</strong><small>Com o navegador aberto, coloca na fila os itens desatualizados a cada intervalo escolhido.</small></span>
+          <input id="periodicRefreshEnabled" type="checkbox">
+        </label>
+        <div class="setting-field">
+          <label for="periodicRefreshHours">Verificar a cada</label>
+          <select id="periodicRefreshHours"><option value="1">1 hora</option><option value="2">2 horas</option><option value="3">3 horas</option><option value="6">6 horas</option><option value="12">12 horas</option><option value="24">24 horas</option></select>
+          <small>Usa o mesmo intervalo entre páginas e o mesmo critério de desatualização abaixo. Só sites com permissão concedida entram na fila.</small>
+        </div>
         <div class="setting-field">
           <label for="startupRefreshPaceMinutes">Intervalo entre páginas</label>
           <div class="pace-controls">
@@ -162,9 +171,23 @@
         </div>
       </section>
       <section class="settings-card">
-        <div class="section-title">Perfis de leitura por site</div>
-        <div class="hint">Um seletor CSS pode ser reutilizado em todas as URLs do mesmo domínio. O seletor salvo no produto continua tendo prioridade.</div>
+        <div class="section-title">Leitura de preços por site</div>
+        <div class="hint">O Radar memoriza sozinho o elemento do preço de cada oferta confirmada. Aqui você trava um site inteiro e revisa o que foi memorizado. O seletor salvo na oferta continua tendo prioridade.</div>
+        <div class="lock-actions">
+          <button id="pickPriceButton" class="secondary" type="button">Travar preço nesta página</button>
+          <small id="pickPriceHint" class="lock-hint">Clique no botão e depois no preço, na página da loja.</small>
+        </div>
+        <form id="siteProfileForm" class="site-profile-form">
+          <input id="siteProfileHost" placeholder="Site (ex.: www.kabum.com.br)" aria-label="Site" autocomplete="off">
+          <input id="siteProfileSelector" placeholder="Seletor CSS do preço" aria-label="Seletor CSS do preço" autocomplete="off">
+          <button class="secondary" type="submit">Adicionar site</button>
+        </form>
+        <div class="lock-group-title">Sites travados</div>
         <div id="siteProfilesList" class="site-profiles-list"></div>
+        <div class="lock-group-title">Memorizados automaticamente</div>
+        <div id="autoSelectorsList" class="site-profiles-list"></div>
+        <div class="lock-group-title">Regras embutidas</div>
+        <div id="builtinRulesList" class="site-profiles-list"></div>
       </section>
       <section class="settings-card">
         <div class="section-title">Confiabilidade e histórico</div>
@@ -242,9 +265,20 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="money.js"></script>
-  <script src="data-store.js"></script>
-  <script src="price-extractor.js"></script>
+  <script src="../shared/money.js"></script>
+  <script src="../shared/data-store.js"></script>
+  <script src="../shared/price-extractor.js"></script>
+  <script src="format.js"></script>
+  <script src="item-state.js"></script>
+  <script src="settings.js"></script>
+  <script src="capture.js"></script>
+  <script src="folders.js"></script>
+  <script src="products.js"></script>
+  <script src="offers.js"></script>
+  <script src="refresh.js"></script>
+  <script src="site-locks.js"></script>
+  <script src="backup.js"></script>
+  <script src="dialogs.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
